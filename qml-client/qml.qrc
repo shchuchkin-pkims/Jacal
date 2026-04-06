@@ -1,0 +1,8 @@
+<RCC>
+    <qresource prefix="/">
+        <file>qml/main.qml</file>
+        <file>qml/GameBoard.qml</file>
+        <file>qml/TileItem.qml</file>
+        <file>qml/HUD.qml</file>
+    </qresource>
+</RCC>
