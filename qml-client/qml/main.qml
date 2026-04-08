@@ -38,7 +38,8 @@ ApplicationWindow {
         color: "#dd0a1e3d"
         visible: !gameController.gameActive
 
-        property bool showSandbox: false
+        // "main" = top menu, "single" = single player submenu, "sandbox" = sandbox
+        property string menuState: "main"
 
         Column {
             anchors.centerIn: parent
@@ -59,44 +60,97 @@ ApplicationWindow {
 
             Item { width: 1; height: 10 }
 
-            // Tab buttons
-            Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: 10
-
-                Button {
-                    text: "Игра"
-                    width: 120; height: 36
-                    font.pixelSize: 14
-                    onClicked: startScreen.showSandbox = false
-                    background: Rectangle {
-                        color: !startScreen.showSandbox ? "#4a7aba" : "#2a4a6a"
-                        radius: 5
-                    }
-                    contentItem: Text { text: parent.text; color: "white"; font: parent.font
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                }
-                Button {
-                    text: "Песочница"
-                    width: 120; height: 36
-                    font.pixelSize: 14
-                    onClicked: startScreen.showSandbox = true
-                    background: Rectangle {
-                        color: startScreen.showSandbox ? "#4a7aba" : "#2a4a6a"
-                        radius: 5
-                    }
-                    contentItem: Text { text: parent.text; color: "white"; font: parent.font
-                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                }
-            }
-
-            Item { width: 1; height: 5 }
-
-            // === GAME MODES ===
+            // ========== TOP MENU ==========
             Column {
                 width: parent.width
                 spacing: 8
-                visible: !startScreen.showSandbox
+                visible: startScreen.menuState === "main"
+
+                Button {
+                    width: parent.width; height: 42; text: "Одиночная игра"; font.pixelSize: 16
+                    onClicked: startScreen.menuState = "single"
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "white"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
+                Button {
+                    width: parent.width; height: 42; text: "Сетевая игра"; font.pixelSize: 16
+                    onClicked: gameController.showNetworkScreen()
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "#aaddff"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
+                Button {
+                    width: parent.width; height: 42; text: "Песочница"; font.pixelSize: 16
+                    onClicked: startScreen.menuState = "sandbox"
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "white"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
+                Item { width: 1; height: 4 }
+
+                Button {
+                    width: parent.width; height: 38; text: "Проверить обновления"; font.pixelSize: 14
+                    onClicked: updateChecker.checkForUpdates()
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "#999"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
+                Button {
+                    width: parent.width; height: 38; text: "Выход"; font.pixelSize: 14
+                    onClicked: Qt.quit()
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "#999"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
+                Text {
+                    text: "v" + updateChecker.currentVersion
+                    color: "#555"; font.pixelSize: 11
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+            }
+
+            // ========== SINGLE PLAYER SUBMENU ==========
+            Column {
+                width: parent.width
+                spacing: 8
+                visible: startScreen.menuState === "single"
+
+                // Map selector
+                RowLayout {
+                    width: parent.width; spacing: 8
+                    Text { text: "Карта:"; color: "#ccc"; font.pixelSize: 14
+                        Layout.alignment: Qt.AlignVCenter }
+                    ComboBox {
+                        id: mapSelector
+                        Layout.fillWidth: true; height: 36
+                        model: {
+                            var maps = gameController.availableMaps();
+                            var names = [];
+                            for (var i = 0; i < maps.length; i++) names.push(maps[i].name);
+                            return names;
+                        }
+                        property var mapIds: {
+                            var maps = gameController.availableMaps();
+                            var ids = [];
+                            for (var i = 0; i < maps.length; i++) ids.push(maps[i].id);
+                            return ids;
+                        }
+                        property string selectedMapId: mapIds.length > 0 ? mapIds[currentIndex] : "classic"
+                        currentIndex: 0
+
+                        background: Rectangle { color: "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                        contentItem: Text {
+                            text: mapSelector.displayText; color: "white"; font.pixelSize: 14
+                            leftPadding: 8; verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
 
                 Repeater {
                     model: [
@@ -110,19 +164,29 @@ ApplicationWindow {
                     Button {
                         width: parent.width; height: 38
                         text: modelData.text; font.pixelSize: 14
-                        onClicked: gameController.newGame(modelData.players, modelData.team, modelData.ai)
+                        onClicked: gameController.newGame(modelData.players, modelData.team, modelData.ai, mapSelector.selectedMapId)
                         background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
                         contentItem: Text { text: parent.text; color: "white"; font: parent.font
                             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     }
                 }
+
+                Item { width: 1; height: 4 }
+
+                Button {
+                    width: parent.width; height: 36; text: "\u25C0  Назад"; font.pixelSize: 14
+                    onClicked: startScreen.menuState = "main"
+                    background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "#aaa"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
             }
 
-            // === SANDBOX ===
+            // ========== SANDBOX ==========
             Column {
                 width: parent.width
                 spacing: 4
-                visible: startScreen.showSandbox
+                visible: startScreen.menuState === "sandbox"
 
                 Text {
                     text: "Выберите тип клетки для тестирования:"
@@ -131,26 +195,19 @@ ApplicationWindow {
                 }
 
                 Rectangle {
-                    width: parent.width
-                    height: 360
-                    color: "#1a3050"
-                    radius: 6
-                    clip: true
+                    width: parent.width; height: 360
+                    color: "#1a3050"; radius: 6; clip: true
 
                     Flickable {
-                        anchors.fill: parent
-                        anchors.margins: 6
-                        contentHeight: sandboxCol.height
-                        clip: true
+                        anchors.fill: parent; anchors.margins: 6
+                        contentHeight: sandboxCol.height; clip: true
 
                         Column {
                             id: sandboxCol
-                            width: parent.width
-                            spacing: 3
+                            width: parent.width; spacing: 3
 
                             Repeater {
                                 model: gameController.sandboxTileTypes()
-
                                 Button {
                                     width: parent.width; height: 32
                                     text: modelData.name; font.pixelSize: 13
@@ -168,33 +225,117 @@ ApplicationWindow {
                 }
 
                 Text {
-                    text: "Поле заполнено открытыми пустыми клетками.\nТестовые клетки закрыты — рядом с кораблями и в центре.\nСундуки на (1,2) и (1,10) для теста монет."
-                    color: "#888"; font.pixelSize: 11
-                    wrapMode: Text.WordWrap
-                    width: parent.width
-                    horizontalAlignment: Text.AlignHCenter
+                    text: "Тестовые клетки рядом с кораблями и в центре.\nСундуки на (1,2) и (1,10)."
+                    color: "#888"; font.pixelSize: 11; wrapMode: Text.WordWrap
+                    width: parent.width; horizontalAlignment: Text.AlignHCenter
+                }
+
+                Button {
+                    width: parent.width; height: 36; text: "\u25C0  Назад"; font.pixelSize: 14
+                    onClicked: startScreen.menuState = "main"
+                    background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 5 }
+                    contentItem: Text { text: parent.text; color: "#aaa"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 }
             }
+        }
+    }
 
-            Item { width: 1; height: 10 }
+    // ===== NETWORK SCREEN =====
+    NetworkScreen {
+        id: networkScreen
+        anchors.fill: parent
+        visible: false
+    }
 
-            Button {
-                width: parent.width; height: 38
-                text: "Выход"
-                font.pixelSize: 14
-                onClicked: Qt.quit()
-                background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
-                contentItem: Text { text: parent.text; color: "white"; font: parent.font
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+    // ===== UPDATE DIALOG =====
+    Rectangle {
+        id: updateDialog
+        anchors.fill: parent; color: "#cc000000"; visible: false; z: 100
+
+        Rectangle {
+            anchors.centerIn: parent; width: 400; height: updateCol.height + 40
+            color: "#1a3050"; radius: 10; border.color: "#4a7aba"; border.width: 2
+
+            Column {
+                id: updateCol
+                anchors.centerIn: parent; spacing: 12; width: 360
+
+                Text {
+                    text: updateChecker.updateAvailable ? "Доступно обновление!" : "Проверка обновлений"
+                    font.pixelSize: 20; font.bold: true; color: "#ffd700"
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                Text {
+                    text: updateChecker.checking ? "Проверяю..." :
+                          updateChecker.updateAvailable ?
+                            "Текущая: v" + updateChecker.currentVersion + "\nНовая: v" + updateChecker.latestVersion :
+                            "У вас актуальная версия (v" + updateChecker.currentVersion + ")"
+                    color: "#ccc"; font.pixelSize: 14; wrapMode: Text.WordWrap; width: parent.width
+                    horizontalAlignment: Text.AlignHCenter
+                }
+                ProgressBar { width: parent.width; visible: updateChecker.downloading; value: updateChecker.downloadProgress / 100.0 }
+                Row {
+                    anchors.horizontalCenter: parent.horizontalCenter; spacing: 12
+                    Button {
+                        text: "Обновить"; width: 140; visible: updateChecker.updateAvailable && !updateChecker.downloading
+                        onClicked: updateChecker.downloadUpdate()
+                        background: Rectangle { color: parent.hovered ? "#4a8a4a" : "#2a6a2a"; radius: 5 }
+                        contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 14
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
+                    Button {
+                        text: "Закрыть"; width: 140; visible: !updateChecker.downloading
+                        onClicked: updateDialog.visible = false
+                        background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 5 }
+                        contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 14
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
             }
         }
+    }
+
+    Connections {
+        target: updateChecker
+        function onUpdateChecked() {
+            if (updateChecker.updateAvailable || updateDialog.visible) updateDialog.visible = true
+        }
+    }
+
+    // Auto-check updates on startup (silent)
+    Component.onCompleted: {
+        updateChecker.checkForUpdates()
+        // No auto LAN discovery — user clicks "Обновить" in network screen
+    }
+
+    // Screen switching
+    Connections {
+        target: gameController
+        function onScreenChanged(screen) {
+            if (screen === "network") {
+                networkScreen.visible = true
+                startScreen.visible = false
+            } else if (screen === "main") {
+                networkScreen.visible = false
+                startScreen.visible = true
+                startScreen.menuState = "main"
+                networkClient.stopLanDiscovery()
+            }
+        }
+    }
+
+    // Network game started
+    Connections {
+        target: networkClient
+        function onGameStarted(seed, numTeams, teamMode) { networkScreen.visible = false }
+        function onErrorReceived(msg) { msgText.text = msg; msgPopup.visible = true; msgTimer.restart() }
     }
 
     // ===== GAME OVER =====
     Rectangle {
         id: gameOverOverlay
         anchors.fill: parent; color: "#cc000000"; visible: false
-
         Column {
             anchors.centerIn: parent; spacing: 20
             Text { text: gameOverText; font.pixelSize: 36; font.bold: true; color: "#ffd700"
@@ -214,13 +355,8 @@ ApplicationWindow {
         target: gameController
         function onGameOver(winner) { gameOverText = "Победа: " + winner + "!"; gameOverOverlay.visible = true }
         function onGameChanged() {
-            if (!gameController.gameActive) {
-                startScreen.visible = true
-            } else {
-                // New game started — hide all overlays
-                startScreen.visible = false
-                gameOverOverlay.visible = false
-            }
+            if (!gameController.gameActive) startScreen.visible = true
+            else { startScreen.visible = false; gameOverOverlay.visible = false }
         }
     }
 
@@ -231,7 +367,6 @@ ApplicationWindow {
         anchors.bottom: parent.bottom; anchors.bottomMargin: 20
         width: msgText.width + 30; height: msgText.height + 16
         color: "#cc2a4a6a"; radius: 8; visible: false
-
         Text { id: msgText; anchors.centerIn: parent; color: "white"; font.pixelSize: 14 }
         Timer { id: msgTimer; interval: 3000; onTriggered: msgPopup.visible = false }
     }

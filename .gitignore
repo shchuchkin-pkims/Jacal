@@ -1,10 +1,10 @@
 build/
-*.exe
 *.o
 *.a
-jackal_console
-jackal_win64.exe
-test_spinner
-test_spinner2
-test_pickup
-assets/tiles/raw_extracted/
+test_core
+test_network
+test_network.moc
+dump_board
+temp_files/
+release/
+*.exe

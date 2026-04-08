@@ -264,6 +264,12 @@ static std::string moveDescription(const Move& m) {
         s = "Пропуск (ром)"; break;
     case MoveType::PickupCoin:
         s = "Подобрать монету"; break;
+    case MoveType::UseRum:
+        if (m.characterIndex >= 0)
+            s = "Ром -> персонаж (" + std::to_string(m.to.row) + "," + std::to_string(m.to.col) + ")";
+        else
+            s = "Ром -> освободить #" + std::to_string(m.pirateId.index);
+        break;
     default:
         s = "Ход #" + std::to_string(static_cast<int>(m.type)); break;
     }

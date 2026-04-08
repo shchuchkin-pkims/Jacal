@@ -60,21 +60,21 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
     switch (role) {
     case RowRole: return r;
     case ColRole: return c;
-    case IsCornerRole: return isCorner(coord);
-    case IsWaterRole: return isWater(coord) || isCorner(coord);
-    case IsLandRole: return isLand(coord);
+    case IsCornerRole: return m_hasState ? m_state.mapIsRock(coord) : isCorner(coord);
+    case IsWaterRole: return m_hasState ? (m_state.mapIsWater(coord) || m_state.mapIsRock(coord)) : (isWater(coord) || isCorner(coord));
+    case IsLandRole: return m_hasState ? m_state.mapIsLand(coord) : isLand(coord);
 
     case RevealedRole:
-        if (!m_hasState || !isLand(coord)) return true;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return true;
         return m_state.board[r][c].revealed;
 
     case TileTypeNameRole:
-        if (!m_hasState || !isLand(coord)) return "";
+        if (!m_hasState || !m_state.mapIsLand(coord)) return "";
         if (!m_state.board[r][c].revealed) return "closed";
         return QString::fromUtf8(tileTypeName(m_state.board[r][c].type));
 
     case TileSymbolRole:
-        if (!m_hasState || !isLand(coord)) return "";
+        if (!m_hasState || !m_state.mapIsLand(coord)) return "";
         if (!m_state.board[r][c].revealed) return "";
         return QString::fromUtf8(tileSymbol(m_state.board[r][c].type));
 
@@ -88,11 +88,11 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
     }
 
     case CoinsRole:
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         return m_state.board[r][c].coins;
 
     case HasGalleonRole:
-        if (!m_hasState || !isLand(coord)) return false;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return false;
         return m_state.board[r][c].hasGalleonTreasure;
 
     case IsValidMoveRole: {
@@ -103,32 +103,32 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
     }
 
     case DirectionBitsRole:
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         if (!m_state.board[r][c].revealed) return 0;
         return static_cast<int>(m_state.board[r][c].directionBits);
 
     case RotationRole:
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         return m_state.board[r][c].rotation;
 
     case TreasureValueRole:
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         return m_state.board[r][c].treasureValue;
 
     case ImageSourceRole: {
-        if (!m_hasState || !isLand(coord) || m_assetsPath.isEmpty()) return QString("");
+        if (!m_hasState || !m_state.mapIsLand(coord) || m_assetsPath.isEmpty()) return QString("");
         const auto& tile = m_state.board[r][c];
         if (!tile.revealed) return QString("file://" + m_assetsPath + "/closed.png");
         return QString("file://" + tileImagePath(tile));
     }
 
     case SpinnerStepsRole:
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         if (!m_state.board[r][c].revealed) return 0;
         return spinnerSteps(m_state.board[r][c].type);
 
     case SpinnerProgressRole: {
-        if (!m_hasState || !isLand(coord)) return 0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0;
         if (!isSpinner(m_state.board[r][c].type)) return 0;
         int maxProg = 0;
         for (int t = 0; t < m_state.config.numTeams; t++)
@@ -141,27 +141,30 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
     }
 
     case ImageRotationRole: {
-        if (!m_hasState || !isLand(coord)) return 0.0;
+        if (!m_hasState || !m_state.mapIsLand(coord)) return 0.0;
         auto& tile = m_state.board[r][c];
         if (!tile.revealed) return 0.0;
 
         if (tile.type == TileType::Arrow) {
             int ndirs = popcount8(tile.directionBits);
             if (ndirs == 1) {
-                // Single-direction: image points East (right)
+                // Single-direction: image points East. Snap to 90° only.
+                // Cardinal dirs only in the actual game.
                 for (int d = 0; d < 8; d++) {
                     if (tile.directionBits & dirBit(d)) {
-                        return static_cast<double>((d - DIR_E) * 45);
+                        // N(0)→-90, E(2)→0, S(4)→90, W(6)→180
+                        // For diagonal dirs, snap to nearest cardinal
+                        int snapAngles[] = {-90, -90, 0, 90, 90, 90, 180, -90};
+                        return static_cast<double>(snapAngles[d]);
                     }
                 }
             }
             if (ndirs == 2) {
                 // 2-dir opposite: tile_arrow_2b.png shows E+W (horizontal)
-                // Find first direction to compute rotation from horizontal
                 for (int d = 0; d < 8; d++) {
                     if (tile.directionBits & dirBit(d)) {
-                        // d=0(N): need 90°, d=2(E): need 0°, d=4(S): need 90°
-                        return static_cast<double>((d - DIR_E) * 45);
+                        int snapAngles[] = {-90, -90, 0, 90, 90, 90, 180, -90};
+                        return static_cast<double>(snapAngles[d]);
                     }
                 }
             }
@@ -169,10 +172,11 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
             return static_cast<double>(tile.rotation * 90);
         }
         if (tile.type == TileType::Cannon) {
-            // Cannon image points North (up) in the PDF
+            // Cannon image points North. Snap to 90° only.
             for (int d = 0; d < 8; d++) {
                 if (tile.directionBits & dirBit(d)) {
-                    return static_cast<double>(d * 45);
+                    int snapAngles[] = {0, 0, 90, 90, 180, 180, 270, 270};
+                    return static_cast<double>(snapAngles[d]);
                 }
             }
         }
@@ -194,8 +198,8 @@ void BoardModel::update(const GameState& state, const PirateId& selected,
 
 QString BoardModel::cellColor(int r, int c) const {
     Coord coord = {r, c};
-    if (isCorner(coord)) return "#0a1e3d";
-    if (isWater(coord)) return "#1a6090";
+    if (m_hasState ? m_state.mapIsRock(coord) : isCorner(coord)) return "#0a1e3d";
+    if (m_hasState ? m_state.mapIsWater(coord) : isWater(coord)) return "#1a6090";
     if (!m_hasState) return "#2d5a1e";
     const auto& tile = m_state.board[r][c];
     if (!tile.revealed) return "#2d5a1e";
@@ -287,12 +291,14 @@ QString BoardModel::tileImagePath(const Tile& tile) const {
     case TileType::BenGunn:       return base + "bengunn.png";
     case TileType::Missionary:    return base + "missionary.png";
     case TileType::Friday:        return base + "friday.png";
-    case TileType::Rum:           return base + "rum.png";
+    case TileType::Rum:
+        if (tile.rumBottles >= 3) return base + "rum_3.png";
+        if (tile.rumBottles == 2) return base + "rum_2.png";
+        return base + "rum.png";
     case TileType::RumBarrel:     return base + "rum_barrel.png";
     case TileType::Cave:          return base + "cave.png";
     case TileType::ThickJungle:   return base + "thick_jungle.png";
     case TileType::Grass:         return base + "grass.png";
-    case TileType::Caramba:       return base + "caramba.png";
     default:                      return base + "empty_0.png";
     }
 }

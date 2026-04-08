@@ -1,0 +1,4 @@
+NetworkScreen 1.0 NetworkScreen.qml
+GameBoard 1.0 GameBoard.qml
+TileItem 1.0 TileItem.qml
+HUD 1.0 HUD.qml

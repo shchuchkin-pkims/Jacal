@@ -1,15 +1,32 @@
-name: Build Jacal
+name: Build & Test Jacal
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, develop ]
   pull_request:
     branches: [ main, master ]
 
 jobs:
+  # Core tests (fast, no Qt needed)
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build core tests
+        run: |
+          g++ -std=c++17 -O2 -I core \
+            core/types.cpp core/game_state.cpp core/rules.cpp \
+            core/game.cpp core/ai.cpp core/map_def.cpp \
+            tests/test_core.cpp -o test_core
+
+      - name: Run core tests
+        run: ./test_core
+
   # Linux GUI (Qt6 QML)
   build-linux-gui:
     runs-on: ubuntu-latest
+    needs: test-core
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +36,8 @@ jobs:
           sudo apt-get install -y qt6-base-dev qt6-declarative-dev \
             qml6-module-qtquick qml6-module-qtquick-controls \
             qml6-module-qtquick-layouts qml6-module-qtquick-window \
-            qml6-module-qtquick-templates qml6-module-qtqml-workerscript
+            qml6-module-qtquick-templates qml6-module-qtqml-workerscript \
+            libqt6network6-dev
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -36,6 +54,7 @@ jobs:
   # Linux Console
   build-linux-console:
     runs-on: ubuntu-latest
+    needs: test-core
     steps:
       - uses: actions/checkout@v4
 
@@ -43,8 +62,8 @@ jobs:
         run: |
           g++ -std=c++17 -O2 -I core \
             core/types.cpp core/game_state.cpp core/rules.cpp \
-            core/game.cpp core/ai.cpp console/main.cpp \
-            -o jackal-console-linux
+            core/game.cpp core/ai.cpp core/map_def.cpp \
+            console/main.cpp -o jackal-console-linux
 
       - name: Smoke test
         run: echo -e "1\n0\n\nq" | timeout 5 ./jackal-console-linux || true
@@ -58,6 +77,7 @@ jobs:
   # Windows Console (cross-compiled)
   build-windows-console:
     runs-on: ubuntu-latest
+    needs: test-core
     steps:
       - uses: actions/checkout@v4
 
@@ -69,8 +89,8 @@ jobs:
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -static \
             -I core \
             core/types.cpp core/game_state.cpp core/rules.cpp \
-            core/game.cpp core/ai.cpp console/main.cpp \
-            -o jackal-win64.exe
+            core/game.cpp core/ai.cpp core/map_def.cpp \
+            console/main.cpp -o jackal-win64.exe
 
       - name: Upload Windows exe
         uses: actions/upload-artifact@v4

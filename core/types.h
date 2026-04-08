@@ -207,6 +207,9 @@ struct Pirate {
     bool carryingGalleon = false;
     int spinnerProgress = 0;
     int drunkTurnsLeft = 0;
+    std::string name;
+    bool isFemale = false;
+    std::string portrait; // filename in assets/portraits/
 };
 
 // ============================================================
@@ -272,6 +275,7 @@ struct GameConfig {
     int numTeams = 4;
     bool teamMode = false; // opposite teams are allies
     uint32_t seed = 0;
+    std::string mapId = "classic"; // map to use
 
     // Sandbox mode: fill board with Empty, place one test tile at center
     bool sandbox = false;

@@ -45,32 +45,7 @@ Rectangle {
         styleColor: "#000000"
     }
 
-    // === HORSE (Knight) indicator — clear "L" pattern to distinguish from arrows ===
-    Rectangle {
-        anchors.fill: parent
-        anchors.margins: 2
-        color: "#cc000000"
-        radius: 4
-        visible: tileTypeName === "Horse" && revealed
-
-        Column {
-            anchors.centerIn: parent
-            spacing: 1
-            Text {
-                text: "\u265E"  // chess knight symbol
-                color: "#ffdd00"
-                font.pixelSize: tileRoot.width * 0.45
-                font.bold: true
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-            Text {
-                text: "L-ход"
-                color: "#cccccc"
-                font.pixelSize: tileRoot.width * 0.18
-                anchors.horizontalCenter: parent.horizontalCenter
-            }
-        }
-    }
+    // Horse tile: just show the image, no overlay
 
     // === ARROW DIRECTION OVERLAY (Unicode arrows, always visible on arrow tiles) ===
     Item {

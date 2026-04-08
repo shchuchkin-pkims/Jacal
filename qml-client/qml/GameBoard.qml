@@ -136,10 +136,11 @@ Item {
                 return myIdx;
             }
 
-            x: tileGrid.x + modelData.col * cellSize + cellSize * 0.08 + pirateIdx * cellSize * 0.25
-            y: tileGrid.y + modelData.row * cellSize + cellSize * 0.5
-            width: cellSize * 0.35
-            height: cellSize * 0.42
+            property bool isSelected: modelData.selected
+            x: tileGrid.x + modelData.col * cellSize + cellSize * 0.08 + pirateIdx * cellSize * 0.22
+            y: tileGrid.y + modelData.row * cellSize + (isSelected ? cellSize * 0.38 : cellSize * 0.5)
+            width: isSelected ? cellSize * 0.45 : cellSize * 0.33
+            height: isSelected ? cellSize * 0.55 : cellSize * 0.40
 
             Behavior on x { NumberAnimation { duration: 250; easing.type: Easing.OutQuad } }
             Behavior on y { NumberAnimation { duration: 250; easing.type: Easing.OutQuad } }

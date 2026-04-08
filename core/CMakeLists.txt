@@ -4,6 +4,7 @@ add_library(jackal_core STATIC
     rules.cpp
     game.cpp
     ai.cpp
+    map_def.cpp
 )
 
 target_include_directories(jackal_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

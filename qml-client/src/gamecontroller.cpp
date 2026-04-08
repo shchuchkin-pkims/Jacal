@@ -1,6 +1,9 @@
 #include "gamecontroller.h"
 #include "boardmodel.h"
+#include "networkclient.h"
+#include "map_def.h"
 #include <QDebug>
+#include <QDir>
 
 GameController::GameController(QObject* parent) : QObject(parent) {
     m_aiTimer.setSingleShot(true);
@@ -8,10 +11,118 @@ GameController::GameController(QObject* parent) : QObject(parent) {
     connect(&m_aiTimer, &QTimer::timeout, this, &GameController::processAITurn);
 }
 
-void GameController::newGame(int numPlayers, bool teamMode, bool vsAI) {
+void GameController::setNetworkClient(NetworkClient* nc) {
+    m_networkClient = nc;
+    if (!nc) return;
+    connect(nc, &NetworkClient::gameStarted, this, &GameController::onNetworkGameStarted);
+    connect(nc, &NetworkClient::gameMoveReceived, this, &GameController::onNetworkMoveReceived);
+    connect(nc, &NetworkClient::gameOver, this, &GameController::onNetworkGameOver);
+}
+
+void GameController::onNetworkGameStarted(int seed, int numTeams, bool teamMode) {
+    m_isNetworkGame = true;
+    m_myNetworkTeam = m_networkClient->mySlot();
+    for (int i = 0; i < MAX_TEAMS; i++) { m_isAI[i] = false; m_netSlotIsAI[i] = false; }
+
+    // Determine which teams are AI from lobby slot data
+    QVariantList slotList = m_networkClient->roomSlots();
+    int teamIdx = 0;
+    for (int i = 0; i < slotList.size() && teamIdx < MAX_TEAMS; i++) {
+        QVariantMap slotMap = slotList[i].toMap();
+        QString state = slotMap.value("state").toString();
+        if (state == "closed") continue;
+        if (state == "ai") m_netSlotIsAI[teamIdx] = true;
+        teamIdx++;
+    }
+
+    // Copy game state from network client
+    m_game = Game();
+    m_game.state() = m_networkClient->game().state();
+
+    m_gameActive = true;
+    clearSelection();
+    m_legalMoves = m_game.getLegalMoves();
+    m_moveLog.clear();
+    addLog("=== Сетевая игра ===");
+    addLog(QString("Вы играете за %1 (слот %2)")
+        .arg(QString::fromUtf8(teamName(static_cast<Team>(m_myNetworkTeam))))
+        .arg(m_myNetworkTeam + 1));
+
+    // Log slot/AI mapping
+    for (int i = 0; i < numTeams; i++) {
+        addLog(QString("  Команда %1: %2")
+            .arg(QString::fromUtf8(teamName(static_cast<Team>(i))))
+            .arg(m_netSlotIsAI[i] ? "ИИ" : "Игрок"));
+    }
+
+    updateAll();
+    emit gameChanged();
+}
+
+void GameController::onNetworkMoveReceived(QJsonObject moveData) {
+    if (!m_isNetworkGame || !m_gameActive) return;
+
+    // NetworkClient already applied the move to its m_game.
+    // Copy the authoritative state.
+    m_game.state() = m_networkClient->game().state();
+
+    clearSelection();
+    m_legalMoves = m_game.getLegalMoves();
+
+    TurnPhase phase = m_game.state().phase;
+    int curTeam = static_cast<int>(m_game.currentTeam());
+
+    // Log the move with detailed info
+    QJsonObject moveObj = moveData["move"].toObject();
+    int moveType = moveObj["type"].toInt();
+    int pt = moveObj["pt"].toInt();
+    int toR = moveObj["toR"].toInt(-1), toC = moveObj["toC"].toInt(-1);
+    int fromR = moveObj["fromR"].toInt(-1), fromC = moveObj["fromC"].toInt(-1);
+    addLog(QString("[%1] (%2,%3)->(%4,%5) тип=%6 фаза=%7 очередь=%8")
+        .arg(QString::fromUtf8(teamName(static_cast<Team>(pt))))
+        .arg(fromR).arg(fromC).arg(toR).arg(toC)
+        .arg(moveType)
+        .arg(static_cast<int>(phase))
+        .arg(curTeam));
+
+    // Handle phase-specific targets (arrow choice, horse, cave, etc.)
+    if (phase != TurnPhase::ChooseAction) {
+        // Show valid targets if this client can act (not AI)
+        bool canAct = (curTeam >= 0 && curTeam < MAX_TEAMS && !m_netSlotIsAI[curTeam]);
+        if (canAct) {
+            m_validTargetCoords.clear();
+            for (auto& mv : m_legalMoves) {
+                if (mv.to.valid()) {
+                    bool dup = false;
+                    for (auto& c : m_validTargetCoords) if (c == mv.to) { dup = true; break; }
+                    if (!dup) m_validTargetCoords.push_back(mv.to);
+                }
+            }
+            addLog(QString("  -> Выбор phase=%1 targets=%2 moves=%3 mySlot=%4 curTeam=%5")
+                .arg(static_cast<int>(phase))
+                .arg(static_cast<int>(m_validTargetCoords.size()))
+                .arg(static_cast<int>(m_legalMoves.size()))
+                .arg(m_myNetworkTeam).arg(curTeam));
+        } else {
+            addLog(QString("  -> Ожидаю (AI или другой игрок, team=%1)").arg(curTeam));
+        }
+    }
+
+    updateAll();
+
+    if (m_game.isGameOver()) {
+        emit gameOver(QString::fromUtf8(teamName(m_game.getWinner())));
+    }
+}
+
+void GameController::onNetworkGameOver(QString winnerName) {
+    addLog("=== Игра окончена: " + winnerName + " ===");
+    emit gameOver(winnerName);
+}
+
+void GameController::newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId) {
     m_aiTimer.stop();
     if (numPlayers < 2) {
-        // Return to menu
         m_gameActive = false;
         clearSelection();
         emit gameChanged();
@@ -22,6 +133,7 @@ void GameController::newGame(int numPlayers, bool teamMode, bool vsAI) {
     cfg.numTeams = numPlayers;
     cfg.teamMode = teamMode;
     cfg.seed = 0;
+    cfg.mapId = mapId.toStdString();
 
     m_isAI = {false, false, false, false};
     if (vsAI) {
@@ -34,20 +146,154 @@ void GameController::newGame(int numPlayers, bool teamMode, bool vsAI) {
     clearSelection();
     m_legalMoves = m_game.getLegalMoves();
     m_moveLog.clear();
-    addLog("=== Новая игра ===");
+    addLog("=== " + mapId + " ===");
     updateAll();
     emit gameChanged();
 
     scheduleAIIfNeeded();
 }
 
+QString GameController::portraitsPath() const {
+    if (!m_boardModel) return "";
+    QString ap = m_boardModel->assetsPath();
+    if (ap.isEmpty()) return "";
+    // assets/tiles -> assets/portraits
+    QDir d(ap + "/../portraits");
+    return d.exists() ? d.absolutePath() : "";
+}
+
+int GameController::currentTeamRum() const {
+    if (!m_gameActive) return 0;
+    int ti = static_cast<int>(m_game.state().currentTeam());
+    return (ti >= 0 && ti < MAX_TEAMS) ? m_game.state().rumOwned[ti] : 0;
+}
+
+QVariantList GameController::crewStatus() const {
+    QVariantList list;
+    if (!m_gameActive) return list;
+    const auto& s = m_game.state();
+    Team cur = s.currentTeam();
+
+    // Current team's pirates first
+    auto addPirates = [&](int t, bool isCurrentTeam) {
+        for (int i = 0; i < PIRATES_PER_TEAM; i++) {
+            const auto& p = s.pirates[t][i];
+            QVariantMap m;
+            m["name"] = QString::fromUtf8(p.name.c_str());
+            m["portrait"] = QString::fromUtf8(p.portrait.c_str());
+            m["team"] = t;
+            m["index"] = i;
+            m["teamColor"] = QString::fromUtf8(teamColor(static_cast<Team>(t)));
+            m["isCurrentTeam"] = isCurrentTeam;
+            m["row"] = p.pos.row;
+            m["col"] = p.pos.col;
+            m["hasCoin"] = p.carryingCoin || p.carryingGalleon;
+            m["isGalleon"] = p.carryingGalleon;
+            QString status;
+            switch (p.state) {
+                case PirateState::OnShip: status = "На корабле"; break;
+                case PirateState::OnBoard:
+                    status = QString("(%1,%2)").arg(p.pos.row).arg(p.pos.col);
+                    if (p.spinnerProgress > 0) {
+                        int req = 0;
+                        if (isLand(p.pos)) req = spinnerSteps(s.tileAt(p.pos).type);
+                        status += QString(" [%1/%2]").arg(p.spinnerProgress).arg(req);
+                    }
+                    break;
+                case PirateState::Dead: status = "Погиб"; break;
+                case PirateState::InTrap: status = "В ловушке"; break;
+                case PirateState::InCave: status = "В пещере"; break;
+            }
+            m["status"] = status;
+            m["state"] = static_cast<int>(p.state);
+            m["isCharacter"] = false;
+            m["selected"] = (m_selectedPirate.team == static_cast<Team>(t) && m_selectedPirate.index == i);
+            m["teamIdx"] = t;
+            m["unitIndex"] = i;
+            list.append(m);
+        }
+    };
+
+    // Current team
+    addPirates(static_cast<int>(cur), true);
+
+    // Characters owned by current team
+    for (int ci = 0; ci < MAX_CHARACTERS; ci++) {
+        const auto& ch = s.characters[ci];
+        if (ch.owner != cur || !ch.discovered) continue;
+        QVariantMap m;
+        const char* charNames[] = {"Бен Ганн", "Бен Ганн", "Бен Ганн", "Миссионер", "Пятница"};
+        const char* charPortraits[] = {"ben_gann.png", "ben_gann.png", "ben_gann.png",
+                                       "missioner.png", "friday.png"};
+        m["name"] = QString(charNames[ci]);
+        m["portrait"] = QString(charPortraits[ci]);
+        m["team"] = static_cast<int>(ch.owner);
+        m["index"] = 100 + ci;
+        m["teamColor"] = QString::fromUtf8(teamColor(ch.owner));
+        m["isCurrentTeam"] = true;
+        m["row"] = ch.pos.row;
+        m["col"] = ch.pos.col;
+        m["hasCoin"] = ch.carryingCoin || ch.carryingGalleon;
+        m["isGalleon"] = ch.carryingGalleon;
+        m["status"] = ch.alive ? QString("(%1,%2)").arg(ch.pos.row).arg(ch.pos.col) : "Погиб";
+        m["state"] = ch.alive ? 1 : 2;
+        m["isCharacter"] = true;
+        m["selected"] = (m_selectedPirate.team == ch.owner && m_selectedPirate.index == 100 + ci);
+        m["teamIdx"] = static_cast<int>(ch.owner);
+        m["unitIndex"] = 100 + ci;
+        list.append(m);
+    }
+
+    // Other teams (smaller)
+    for (int t = 0; t < s.config.numTeams; t++) {
+        if (static_cast<Team>(t) == cur) continue;
+        addPirates(t, false);
+    }
+
+    return list;
+}
+
+void GameController::selectCrewMember(int team, int index) {
+    if (!m_gameActive || m_game.isGameOver() || isAITurn()) return;
+    if (static_cast<Team>(team) != m_game.currentTeam()) return;
+    PirateId id = {static_cast<Team>(team), index};
+    selectPirate(id);
+}
+
 void GameController::quitToMenu() {
     m_aiTimer.stop();
     m_gameActive = false;
+    m_isNetworkGame = false;
+    m_myNetworkTeam = -1;
     clearSelection();
     m_moveLog.clear();
+    if (m_server) { m_server->stop(); delete m_server; m_server = nullptr; }
+    if (m_networkClient && m_networkClient->isConnected()) m_networkClient->disconnect();
     emit gameChanged();
     emit logChanged();
+    emit screenChanged("main");
+}
+
+void GameController::hostGame(const QString& roomName) {
+    if (m_server) { m_server->stop(); delete m_server; }
+    m_server = new GameServer(this);
+    m_server->setRoomName(roomName);
+    if (!m_server->start()) {
+        emit showMessage("Не удалось запустить сервер");
+        delete m_server; m_server = nullptr;
+        return;
+    }
+    emit showMessage("Сервер запущен на порту " + QString::number(m_server->port()));
+    // The QML NetworkClient will connect to localhost
+}
+
+void GameController::showNetworkScreen() {
+    emit screenChanged("network");
+}
+
+void GameController::showMainMenu() {
+    if (m_server) { m_server->stop(); delete m_server; m_server = nullptr; }
+    emit screenChanged("main");
 }
 
 void GameController::newSandbox(int tileTypeId, int dirBits, int value) {
@@ -71,6 +317,21 @@ void GameController::newSandbox(int tileTypeId, int dirBits, int value) {
     addLog("=== Песочница: " + QString(tileTypeName(cfg.sandboxTile)) + " ===");
     updateAll();
     emit gameChanged();
+}
+
+QVariantList GameController::availableMaps() const {
+    QVariantList list;
+    auto& maps = getBuiltinMaps();
+    for (auto& m : maps) {
+        QVariantMap entry;
+        entry["id"] = QString::fromStdString(m.id);
+        entry["name"] = QString::fromStdString(m.name);
+        entry["minPlayers"] = m.minPlayers;
+        entry["maxPlayers"] = m.maxPlayers;
+        entry["landCells"] = m.countLandCells();
+        list.append(entry);
+    }
+    return list;
 }
 
 QVariantList GameController::sandboxTileTypes() const {
@@ -107,7 +368,6 @@ QVariantList GameController::sandboxTileTypes() const {
         {(int)TileType::Earthquake,    "Earthquake",          0, 0},
         {(int)TileType::Airplane,      "Airplane",            0, 0},
         {(int)TileType::Lighthouse,    "Lighthouse",          0, 0},
-        {(int)TileType::Caramba,       "Caramba",             0, 0},
     };
     for (auto& e : entries) {
         QVariantMap m;
@@ -127,6 +387,15 @@ QString GameController::assetsPath() const {
 
 bool GameController::isAITurn() const {
     if (!m_gameActive) return false;
+    if (m_isNetworkGame) {
+        // In network game, block input only for AI-controlled teams.
+        // Human players (even opponents on the same client) can click —
+        // the server validates and rejects unauthorized moves.
+        int curTeam = static_cast<int>(m_game.currentTeam());
+        if (curTeam >= 0 && curTeam < MAX_TEAMS && m_netSlotIsAI[curTeam])
+            return true;
+        return false;
+    }
     int ti = static_cast<int>(m_game.currentTeam());
     return ti >= 0 && ti < MAX_TEAMS && m_isAI[ti];
 }
@@ -173,6 +442,16 @@ QString GameController::phaseText() const {
     case TurnPhase::ChooseArrowDirection: return "Выберите направление стрелки";
     case TurnPhase::ChooseHorseDest:      return "Выберите клетку для хода конём";
     case TurnPhase::ChooseCaveExit:       return "Выберите выход из пещеры";
+    case TurnPhase::ChooseAirplaneTarget: return "Самолёт! Выберите куда лететь (любая клетка)";
+    case TurnPhase::ChooseLighthouseTiles: {
+        int rem = m_game.state().lighthouseRemaining;
+        return QString("Маяк! Выберите клетку для разведки (осталось: %1)").arg(rem);
+    }
+    case TurnPhase::ChooseEarthquakeTiles: {
+        if (!m_game.state().earthquakeFirst.valid())
+            return "Землетрясение! Выберите 1-ю клетку для обмена";
+        return "Землетрясение! Выберите 2-ю клетку для обмена";
+    }
     default: return "";
     }
 }
@@ -290,54 +569,91 @@ void GameController::cellClicked(int row, int col) {
     }
 
     if (m_selectedPirate.valid()) {
+        // If clicked is a valid move target -> execute
         for (auto& c : m_validTargetCoords)
             if (c == clicked) { tryExecuteMove(clicked); return; }
-        auto here = s.piratesAt(clicked, s.currentTeam());
-        for (auto& pid : here)
-            if (pid == m_selectedPirate) { clearSelection(); updateAll(); return; }
+        // If clicked on same tile as selected pirate -> cycle to next unit (dont deselect)
+        // Deselection only if clicking on empty tile or different location
     }
 
-    auto here = s.piratesAt(clicked, s.currentTeam());
-    if (!here.empty()) {
-        // If this pirate is on an active spinner, auto-advance instead of selecting
-        const auto& clickedPirate = s.pirateRef(here[0]);
-        if (s.isOnActiveSpinner(clickedPirate)) {
-            // Find and execute the AdvanceSpinner move
-            for (auto& mv : m_legalMoves) {
-                if (mv.type == MoveType::AdvanceSpinner && mv.pirateId == here[0]) {
-                    Move mvCopy = mv;
-                    auto events = m_game.makeMove(mv);
-                    processEvents(events);
-                    addLog(describeMoveResult(mvCopy, events));
-
-                    int progress = clickedPirate.spinnerProgress;
-                    int required = spinnerSteps(s.tileAt(clickedPirate.pos).type);
-                    if (progress >= required)
-                        emit showMessage(QString("Вертушка пройдена! Пират свободен."));
-                    else
-                        emit showMessage(QString("Вертушка: шаг %1/%2").arg(progress).arg(required));
-
-                    clearSelection();
-                    m_legalMoves = m_game.getLegalMoves();
-                    updateAll();
-                    if (!m_game.isGameOver()) scheduleAIIfNeeded();
-                    return;
+    // Check if clicking on a trapped pirate → auto use rum if available
+    {
+        int ti = static_cast<int>(s.currentTeam());
+        for (int i = 0; i < PIRATES_PER_TEAM; i++) {
+            auto& tp = s.pirates[ti][i];
+            if (tp.pos == clicked && (tp.state == PirateState::InTrap || tp.state == PirateState::InCave)) {
+                for (auto& mv : m_legalMoves) {
+                    if (mv.type == MoveType::UseRum && mv.pirateId == tp.id && mv.characterIndex < 0) {
+                        Move mvCopy = mv;
+                        auto events = m_game.makeMove(mv);
+                        processEvents(events);
+                        addLog(describeMoveResult(mvCopy, events));
+                        clearSelection();
+                        m_legalMoves = m_game.getLegalMoves();
+                        updateAll();
+                        if (!m_game.isGameOver()) scheduleAIIfNeeded();
+                        return;
+                    }
                 }
             }
         }
-        // Always SELECT the pirate first. PickupCoin appears as valid target (same tile).
-        selectPirate(here[0]);
-        return;
     }
 
-    // Check characters at clicked position
-    for (int ci = 0; ci < MAX_CHARACTERS; ci++) {
-        auto& ch = s.characters[ci];
-        if (ch.owner != s.currentTeam() || !ch.discovered || !ch.alive) continue;
-        if (ch.pos == clicked) {
-            selectPirate({s.currentTeam(), 100 + ci});
-            return;
+    // Collect ALL selectable units at this position (pirates + characters)
+    std::vector<PirateId> unitsHere;
+    {
+        auto pirates = s.piratesAt(clicked, s.currentTeam());
+        for (auto& pid : pirates) unitsHere.push_back(pid);
+        for (int ci = 0; ci < MAX_CHARACTERS; ci++) {
+            auto& ch = s.characters[ci];
+            if (ch.owner == s.currentTeam() && ch.discovered && ch.alive && ch.pos == clicked)
+                unitsHere.push_back({s.currentTeam(), 100 + ci});
         }
+    }
+
+    if (!unitsHere.empty()) {
+        // Check spinner auto-advance (only for regular pirates)
+        if (unitsHere.size() == 1 && unitsHere[0].index < PIRATES_PER_TEAM) {
+            const auto& cp = s.pirateRef(unitsHere[0]);
+            if (s.isOnActiveSpinner(cp)) {
+                for (auto& mv : m_legalMoves) {
+                    if (mv.type == MoveType::AdvanceSpinner && mv.pirateId == unitsHere[0]) {
+                        if (m_isNetworkGame && m_networkClient) {
+                            m_networkClient->sendMove(Protocol::moveToJson(mv));
+                            return;
+                        }
+                        Move mvCopy = mv;
+                        auto events = m_game.makeMove(mv);
+                        processEvents(events);
+                        addLog(describeMoveResult(mvCopy, events));
+                        int prog = cp.spinnerProgress;
+                        int req = spinnerSteps(s.tileAt(cp.pos).type);
+                        emit showMessage(prog >= req ?
+                            QString("Вертушка пройдена!") :
+                            QString("Вертушка: шаг %1/%2").arg(prog).arg(req));
+                        clearSelection();
+                        m_legalMoves = m_game.getLegalMoves();
+                        updateAll();
+                        if (!m_game.isGameOver()) scheduleAIIfNeeded();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Cycle through units: if currently selected unit is in this list,
+        // pick the NEXT one. Otherwise pick the first.
+        PirateId toSelect = unitsHere[0];
+        if (m_selectedPirate.valid()) {
+            for (size_t i = 0; i < unitsHere.size(); i++) {
+                if (unitsHere[i] == m_selectedPirate) {
+                    toSelect = unitsHere[(i + 1) % unitsHere.size()];
+                    break;
+                }
+            }
+        }
+        selectPirate(toSelect);
+        return;
     }
 
     // Check ships
@@ -391,9 +707,22 @@ void GameController::tryExecuteMove(Coord target) {
     if (!chosen) return;
 
     Move moveCopy = *chosen;
+
+    // === NETWORK GAME: send to server, DON'T apply locally ===
+    // Server will validate and broadcast back to ALL clients (including us).
+    // We apply the move only when we receive game_move from the server.
+    if (m_isNetworkGame && m_networkClient) {
+        m_networkClient->sendMove(Protocol::moveToJson(moveCopy));
+        clearSelection();
+        updateAll();
+        return;
+    }
+
+    // === LOCAL GAME: apply immediately ===
     auto events = m_game.makeMove(*chosen);
     processEvents(events);
     addLog(describeMoveResult(moveCopy, events));
+
     clearSelection();
     m_legalMoves = m_game.getLegalMoves();
 
@@ -438,8 +767,13 @@ void GameController::doShipMove(int direction) {
         else if (from.col == 12) moveDir = dr;
 
         if ((direction < 0 && moveDir < 0) || (direction > 0 && moveDir > 0)) {
+            if (m_isNetworkGame && m_networkClient) {
+                m_networkClient->sendMove(Protocol::moveToJson(mv));
+                return;
+            }
             auto events = m_game.makeMove(mv);
             processEvents(events);
+            addLog(describeMoveResult(mv, events));
             clearSelection();
             m_legalMoves = m_game.getLegalMoves();
             updateAll();
@@ -527,6 +861,10 @@ void GameController::processEvents(const EventList& events) {
             emit showMessage(QString("Монета подобрана! (+%1)").arg(ev.value > 0 ? ev.value : 1)); break;
         case EventType::PirateTrapped:
             emit showMessage("Ловушка! Ждите спасения товарищем."); break;
+        case EventType::RumUsed:
+            emit showMessage("Ром использован!"); break;
+        case EventType::CharacterDied:
+            emit showMessage("Персонаж погиб!"); break;
         default: break;
         }
     }
@@ -564,6 +902,12 @@ QString GameController::describeMoveResult(const Move& move, const EventList& ev
         desc += QString("персонаж -> (%1,%2)").arg(move.to.row).arg(move.to.col); break;
     case MoveType::ResurrectPirate:
         desc += QString("воскрешение #%1").arg(move.pirateId.index); break;
+    case MoveType::UseRum:
+        if (move.characterIndex >= 0)
+            desc += QString("ром -> персонаж (%1,%2)").arg(move.to.row).arg(move.to.col);
+        else
+            desc += QString("ром -> освободить #%1").arg(move.pirateId.index);
+        break;
     default:
         desc += QString("ход %1").arg(static_cast<int>(move.type)); break;
     }

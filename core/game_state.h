@@ -1,15 +1,31 @@
 #pragma once
 #include "types.h"
+#include "map_def.h"
 #include <vector>
 #include <random>
 
 struct GameState {
     std::array<std::array<Tile, BOARD_SIZE>, BOARD_SIZE> board;
+    std::array<std::array<Terrain, BOARD_SIZE>, BOARD_SIZE> terrain = {}; // from map
     std::array<std::array<Pirate, PIRATES_PER_TEAM>, MAX_TEAMS> pirates;
     std::array<Ship, MAX_TEAMS> ships;
     std::array<Character, MAX_CHARACTERS> characters;
     std::array<int, MAX_TEAMS> scores = {};
     std::array<int, MAX_TEAMS> rumOwned = {};
+
+    // Map-aware topology
+    bool mapIsLand(Coord c) const {
+        if (!c.inBounds()) return false;
+        return terrain[c.row][c.col] == Terrain::Land;
+    }
+    bool mapIsWater(Coord c) const {
+        if (!c.inBounds()) return false;
+        return terrain[c.row][c.col] == Terrain::Sea;
+    }
+    bool mapIsRock(Coord c) const {
+        if (!c.inBounds()) return false;
+        return terrain[c.row][c.col] == Terrain::Rock;
+    }
 
     int currentPlayerIndex = 0;
     std::array<int, MAX_TEAMS> turnOrder = {0, 1, 2, 3};
@@ -22,6 +38,9 @@ struct GameState {
     Coord pendingPos = {-1, -1};
     uint8_t pendingDirBits = 0;
     std::vector<Coord> pendingChoices; // for horse, cave exit, etc.
+    int lighthouseRemaining = 0;       // how many lighthouse tiles left to pick
+    Coord earthquakeFirst = {-1, -1};  // first tile picked for earthquake swap
+    int grassRoundsLeft = 0;          // when >0: each player controls next players team
 
     GameConfig config;
 
@@ -58,29 +77,26 @@ struct GameState {
         return !isAllyShip(c, team);
     }
 
-    // Ship front tile (land tile directly in front)
+    // Ship front tile (first adjacent land tile — works for any map)
     Coord shipFront(Team team) const {
         Coord sp = ships[static_cast<int>(team)].pos;
-        if (sp.row == 0)  return {1, sp.col};
-        if (sp.row == 12) return {11, sp.col};
-        if (sp.col == 0)  return {sp.row, 1};
-        if (sp.col == 12) return {sp.row, 11};
+        // Check 4 cardinal directions first (preferred), then diagonals
+        const int dirs[] = {DIR_N, DIR_S, DIR_E, DIR_W, DIR_NE, DIR_SE, DIR_SW, DIR_NW};
+        for (int d : dirs) {
+            Coord adj = sp.moved(static_cast<Direction>(d));
+            if (adj.inBounds() && mapIsLand(adj)) return adj;
+        }
         return {-1, -1};
     }
 
-    // Tiles from which a pirate can board a ship
+    // Tiles from which a pirate can board a ship (all adjacent land tiles)
     std::vector<Coord> boardingTiles(Team team) const {
         std::vector<Coord> tiles;
-        Coord front = shipFront(team);
-        if (!front.valid()) return tiles;
-        tiles.push_back(front);
         Coord sp = ships[static_cast<int>(team)].pos;
-        if (sp.row == 0 || sp.row == 12) {
-            if (front.col > 1)  tiles.push_back({front.row, front.col - 1});
-            if (front.col < 11) tiles.push_back({front.row, front.col + 1});
-        } else {
-            if (front.row > 1)  tiles.push_back({front.row - 1, front.col});
-            if (front.row < 11) tiles.push_back({front.row + 1, front.col});
+        for (int d = 0; d < 8; d++) {
+            Coord adj = sp.moved(static_cast<Direction>(d));
+            if (adj.inBounds() && mapIsLand(adj))
+                tiles.push_back(adj);
         }
         return tiles;
     }
@@ -157,6 +173,18 @@ struct GameState {
         pendingPos = {-1, -1};
         pendingDirBits = 0;
         pendingChoices.clear();
+        lighthouseRemaining = 0;
+        earthquakeFirst = {-1, -1};
+
+        // Grass (Voodoo) effect: decrement rounds
+        if (grassRoundsLeft > 0) {
+            grassRoundsLeft--;
+            if (grassRoundsLeft == 0) {
+                // Restore original turn order
+                for (int i = 0; i < numActivePlayers; i++)
+                    turnOrder[i] = i;
+            }
+        }
 
         for (int i = 0; i < numActivePlayers; i++) {
             currentPlayerIndex = (currentPlayerIndex + 1) % numActivePlayers;
@@ -175,8 +203,8 @@ struct GameState {
     }
 };
 
-// Create shuffled deck of 117 land tiles
-std::vector<Tile> createDeck(uint32_t seed = 0);
+// Create shuffled deck of tiles (landCount = number of land cells on map)
+std::vector<Tile> createDeck(uint32_t seed = 0, int landCount = LAND_TILES);
 
 // Initialize full game state
 void initializeBoard(GameState& state, const GameConfig& config);

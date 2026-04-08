@@ -7,6 +7,7 @@
 #include <array>
 #include "game.h"
 #include "ai.h"
+#include "gameserver.h"
 
 class BoardModel;
 
@@ -25,20 +26,28 @@ class GameController : public QObject {
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool isAITurn READ isAITurn NOTIFY turnChanged)
     Q_PROPERTY(QString assetsPath READ assetsPath CONSTANT)
+    Q_PROPERTY(QString portraitsPath READ portraitsPath CONSTANT)
     Q_PROPERTY(QStringList moveLog READ moveLog NOTIFY logChanged)
+    Q_PROPERTY(QVariantList crewStatus READ crewStatus NOTIFY boardChanged)
+    Q_PROPERTY(int currentTeamRum READ currentTeamRum NOTIFY boardChanged)
 
 public:
     explicit GameController(QObject* parent = nullptr);
 
     void setBoardModel(BoardModel* model) { m_boardModel = model; }
+    void setNetworkClient(class NetworkClient* nc);
 
-    Q_INVOKABLE void newGame(int numPlayers, bool teamMode, bool vsAI);
+    Q_INVOKABLE void newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId = "classic");
     Q_INVOKABLE void newSandbox(int tileTypeId, int dirBits, int value);
     Q_INVOKABLE QVariantList sandboxTileTypes() const;
+    Q_INVOKABLE QVariantList availableMaps() const;
     Q_INVOKABLE void cellClicked(int row, int col);
     Q_INVOKABLE void moveShipLeft();
     Q_INVOKABLE void moveShipRight();
     Q_INVOKABLE void cancelSelection();
+    Q_INVOKABLE void hostGame(const QString& roomName);
+    Q_INVOKABLE void showNetworkScreen();
+    Q_INVOKABLE void showMainMenu();
 
     bool gameActive() const { return m_gameActive; }
     QString currentTeamName() const;
@@ -53,8 +62,12 @@ public:
     bool hasSelection() const { return m_selectedPirate.valid(); }
     bool isAITurn() const;
     QString assetsPath() const;
+    QString portraitsPath() const;
     QStringList moveLog() const { return m_moveLog; }
+    QVariantList crewStatus() const;
+    int currentTeamRum() const;
     Q_INVOKABLE void quitToMenu();
+    Q_INVOKABLE void selectCrewMember(int team, int index);
 
 signals:
     void gameChanged();
@@ -66,9 +79,13 @@ signals:
     void logChanged();
     void gameOver(QString winner);
     void showMessage(QString msg);
+    void screenChanged(QString screen); // "main", "network"
 
 private slots:
     void processAITurn();
+    void onNetworkGameStarted(int seed, int numTeams, bool teamMode);
+    void onNetworkMoveReceived(QJsonObject moveData);
+    void onNetworkGameOver(QString winnerName);
 
 private:
     void updateAll();
@@ -94,4 +111,11 @@ private:
     // AI
     std::array<bool, MAX_TEAMS> m_isAI = {};
     QTimer m_aiTimer;
+
+    // Network
+    GameServer* m_server = nullptr;
+    class NetworkClient* m_networkClient = nullptr;
+    bool m_isNetworkGame = false;
+    int m_myNetworkTeam = -1;
+    std::array<bool, MAX_TEAMS> m_netSlotIsAI = {};  // which teams are AI in network game
 };
