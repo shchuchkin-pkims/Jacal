@@ -229,6 +229,7 @@ struct Character {
     bool onShip = false;        // character is on the ship
     bool carryingCoin = false;
     bool carryingGalleon = false;
+    bool convertedToPirate = false; // Missionary converted via rum → acts as regular pirate
 };
 
 // ============================================================
@@ -276,6 +277,10 @@ struct GameConfig {
     bool teamMode = false; // opposite teams are allies
     uint32_t seed = 0;
     std::string mapId = "classic"; // map to use
+
+    // Tile density: 0.0 = almost all empty, 1.0 = no empty tiles
+    // Default -1.0 = use original rules ratio (≈85% filled)
+    float tileDensity = -1.0f;
 
     // Sandbox mode: fill board with Empty, place one test tile at center
     bool sandbox = false;

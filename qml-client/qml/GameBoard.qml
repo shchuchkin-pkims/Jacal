@@ -3,21 +3,52 @@ import QtQuick 2.15
 Item {
     id: boardRoot
 
-    property real cellSize: Math.min(width, height) / 13
+    property real labelSize: 14
+    property real cellSize: Math.min(width - labelSize - 4, height - labelSize - 4) / 13
 
     // Board background
     Rectangle {
         anchors.centerIn: parent
-        width: cellSize * 13
-        height: cellSize * 13
+        width: cellSize * 13 + labelSize + 4
+        height: cellSize * 13 + labelSize + 4
         color: "#0d2844"
         radius: 4
+    }
+
+    // Y-axis labels (left side, bottom-up: 0 at bottom, 12 at top)
+    Repeater {
+        model: 13
+        Text {
+            x: tileGrid.x - labelSize - 2
+            y: tileGrid.y + (12 - index) * cellSize + cellSize / 2 - height / 2
+            text: index.toString()
+            color: "#667788"
+            font.pixelSize: Math.min(labelSize - 2, cellSize * 0.35)
+            font.bold: true
+            horizontalAlignment: Text.AlignRight
+            width: labelSize
+        }
+    }
+
+    // X-axis labels (bottom, left-to-right: 0 at left, 12 at right)
+    Repeater {
+        model: 13
+        Text {
+            x: tileGrid.x + index * cellSize + cellSize / 2 - width / 2
+            y: tileGrid.y + 13 * cellSize + 2
+            text: index.toString()
+            color: "#667788"
+            font.pixelSize: Math.min(labelSize - 2, cellSize * 0.35)
+            font.bold: true
+            horizontalAlignment: Text.AlignHCenter
+        }
     }
 
     // Tile grid
     Grid {
         id: tileGrid
-        anchors.centerIn: parent
+        x: parent.width / 2 - (13 * cellSize) / 2 + labelSize / 2
+        y: parent.height / 2 - (13 * cellSize) / 2 - labelSize / 2
         rows: 13
         columns: 13
 
@@ -46,7 +77,7 @@ Item {
                 anchors.fill: parent
                 anchors.margins: 1
                 source: gameController.assetsPath !== "" ?
-                    ("file://" + gameController.assetsPath + "/ship_" + (modelData.team + 1) + ".png") : ""
+                    (gameController.fileUrl("ship_" + (modelData.team + 1) + ".png")) : ""
                 visible: status === Image.Ready
                 fillMode: Image.PreserveAspectFit
                 smooth: true
@@ -117,15 +148,14 @@ Item {
         }
     }
 
-    // Pirates layer — BRIGHT, CONTRASTING tokens
+    // Pirates layer — Portrait-based tokens
     Repeater {
         model: gameController.pirates
 
         Item {
             id: pirateItem
             property int pirateIdx: {
-                var count = 0;
-                var myIdx = 0;
+                var count = 0; var myIdx = 0;
                 var pList = gameController.pirates;
                 for (var i = 0; i < pList.length; i++) {
                     if (pList[i].row === modelData.row && pList[i].col === modelData.col) {
@@ -137,116 +167,98 @@ Item {
             }
 
             property bool isSelected: modelData.selected
-            x: tileGrid.x + modelData.col * cellSize + cellSize * 0.08 + pirateIdx * cellSize * 0.22
-            y: tileGrid.y + modelData.row * cellSize + (isSelected ? cellSize * 0.38 : cellSize * 0.5)
-            width: isSelected ? cellSize * 0.45 : cellSize * 0.33
-            height: isSelected ? cellSize * 0.55 : cellSize * 0.40
+            property real baseSize: cellSize * 0.36
+            property real selSize: cellSize * 0.50
 
-            Behavior on x { NumberAnimation { duration: 250; easing.type: Easing.OutQuad } }
-            Behavior on y { NumberAnimation { duration: 250; easing.type: Easing.OutQuad } }
+            x: tileGrid.x + modelData.col * cellSize + cellSize * 0.05 + pirateIdx * cellSize * 0.20
+            y: tileGrid.y + modelData.row * cellSize + (isSelected ? cellSize * 0.30 : cellSize * 0.46)
+            width: isSelected ? selSize : baseSize
+            height: isSelected ? selSize * 1.15 : baseSize * 1.15
+            z: isSelected ? 100 : pirateIdx  // Selected pirate on top
+
+            Behavior on x { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
+            Behavior on y { NumberAnimation { duration: 200; easing.type: Easing.OutQuad } }
+            Behavior on width { NumberAnimation { duration: 150 } }
+            Behavior on height { NumberAnimation { duration: 150 } }
 
             // Shadow
             Rectangle {
-                anchors.fill: body
-                anchors.topMargin: 2
-                anchors.leftMargin: 2
-                radius: body.radius
-                color: "#60000000"
+                x: 2; y: 2; width: parent.width; height: parent.height
+                radius: 4; color: "#50000000"
             }
 
-            // Pirate body
+            // Portrait frame
             Rectangle {
-                id: body
+                id: frame
                 anchors.fill: parent
-                radius: 5
-                opacity: modelData.trapped ? 0.6 : 1.0
+                radius: 4
+                color: "#20000000"
+                opacity: modelData.trapped ? 0.5 : 1.0
 
-                // Vivid fill colors
-                gradient: Gradient {
-                    GradientStop {
-                        position: 0.0
-                        color: {
-                            switch(modelData.color) {
-                                case "#e0e0e0": return "#ffffff";   // White: bright white top
-                                case "#f0d000": return "#ffee33";   // Yellow: bright yellow
-                                case "#303030": return "#555555";   // Black: dark gray top
-                                case "#d03030": return "#ff4444";   // Red: bright red
-                                default: return modelData.color;
-                            }
-                        }
-                    }
-                    GradientStop {
-                        position: 1.0
-                        color: {
-                            switch(modelData.color) {
-                                case "#e0e0e0": return "#b0b0c0";   // White: grayish bottom
-                                case "#f0d000": return "#cc9900";   // Yellow: dark gold
-                                case "#303030": return "#111111";   // Black: near-black
-                                case "#d03030": return "#881111";   // Red: dark red
-                                default: return modelData.color;
-                            }
-                        }
-                    }
-                }
-
-                // Bold contrasting border
-                border.width: modelData.selected ? 3.5 : 2.5
+                // Border: team color for characters, selection glow for selected
+                border.width: isSelected ? 3 : (modelData.isCharacter ? 2.5 : 2)
                 border.color: {
-                    if (modelData.selected) return "#ffff00";
-                    if (modelData.isCurrentTeam) return "#ffffff";
-                    switch(modelData.color) {
-                        case "#e0e0e0": return "#333333";  // White pirate: dark border
-                        case "#303030": return "#cccccc";  // Black pirate: light border
-                        default: return "#000000";
-                    }
+                    if (isSelected) return "#ffff00"
+                    if (modelData.isCharacter) return modelData.color
+                    if (modelData.isCurrentTeam) return "#ffffffcc"
+                    return modelData.color
                 }
 
-                // Team letter
+                // Portrait image
+                Image {
+                    id: portraitImg
+                    anchors.fill: parent
+                    anchors.margins: 1.5
+                    source: {
+                        if (!modelData.portrait || modelData.portrait === "") return ""
+                        var folder = modelData.isCharacter ? "" : "../portraits/"
+                        if (modelData.isCharacter) folder = "../portraits/"
+                        return gameController.fileUrl(folder + modelData.portrait)
+                    }
+                    visible: status === Image.Ready
+                    fillMode: Image.PreserveAspectCrop
+                    smooth: true
+                }
+
+                // Fallback: team letter (if portrait not found)
                 Text {
                     anchors.centerIn: parent
-                    anchors.verticalCenterOffset: modelData.hasCoin ? -parent.height * 0.12 : 0
+                    visible: !portraitImg.visible
                     text: {
-                        switch(modelData.color) {
-                            case "#e0e0e0": return "W";
-                            case "#f0d000": return "Y";
-                            case "#303030": return "B";
-                            case "#d03030": return "R";
-                            default: return "?";
-                        }
+                        if (modelData.isCharacter) return "?"
+                        if (modelData.color === "#e0e0e0") return "W"
+                        if (modelData.color === "#f0d000") return "Y"
+                        if (modelData.color === "#303030") return "B"
+                        if (modelData.color === "#d03030") return "R"
+                        return "?"
                     }
-                    color: {
-                        switch(modelData.color) {
-                            case "#e0e0e0": return "#222222";
-                            case "#303030": return "#eeeeee";
-                            default: return "#000000";
-                        }
-                    }
-                    font.pixelSize: parent.height * 0.38
+                    color: modelData.color === "#303030" ? "#eee" : "#222"
+                    font.pixelSize: parent.height * 0.4
                     font.bold: true
-                    style: Text.Outline
-                    styleColor: modelData.color === "#303030" ? "#00000040" : "#ffffff40"
                 }
 
-                // Coin indicator
-                Rectangle {
+                // Coin image (replaces $ rectangle)
+                Image {
                     anchors.horizontalCenter: parent.horizontalCenter
                     anchors.bottom: parent.bottom
-                    anchors.bottomMargin: 1
-                    width: parent.width * 0.5
-                    height: parent.height * 0.25
-                    radius: 3
+                    anchors.bottomMargin: -2
+                    width: parent.width * 0.55
+                    height: width
+                    source: modelData.hasCoin ? gameController.fileUrl("coin.png") : ""
+                    visible: modelData.hasCoin && status === Image.Ready
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                }
+                // Coin fallback text
+                Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    text: "$"
                     color: "#ffd700"
-                    border.color: "#aa8800"
-                    border.width: 1
-                    visible: modelData.hasCoin
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: "$"
-                        color: "#553300"
-                        font.pixelSize: parent.height * 0.75
-                        font.bold: true
-                    }
+                    font.pixelSize: parent.height * 0.3
+                    font.bold: true
+                    visible: modelData.hasCoin && !portraitImg.visible
+                    style: Text.Outline; styleColor: "#000"
                 }
 
                 // Selection glow
@@ -257,11 +269,9 @@ Item {
                     color: "transparent"
                     border.color: "#ffff00"
                     border.width: 2
-                    visible: modelData.selected
-
+                    visible: isSelected
                     SequentialAnimation on opacity {
-                        loops: Animation.Infinite
-                        running: modelData.selected
+                        loops: Animation.Infinite; running: isSelected
                         NumberAnimation { from: 0.4; to: 1.0; duration: 400 }
                         NumberAnimation { from: 1.0; to: 0.4; duration: 400 }
                     }

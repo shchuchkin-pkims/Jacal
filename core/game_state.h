@@ -204,7 +204,7 @@ struct GameState {
 };
 
 // Create shuffled deck of tiles (landCount = number of land cells on map)
-std::vector<Tile> createDeck(uint32_t seed = 0, int landCount = LAND_TILES);
+std::vector<Tile> createDeck(uint32_t seed = 0, int landCount = LAND_TILES, float tileDensity = -1.0f);
 
 // Initialize full game state
 void initializeBoard(GameState& state, const GameConfig& config);

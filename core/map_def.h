@@ -45,5 +45,15 @@ struct MapDefinition {
 // Get all built-in maps
 const std::vector<MapDefinition>& getBuiltinMaps();
 
-// Find map by id (returns nullptr if not found, falls back to "classic")
+// Find map by id (checks builtins + registered custom maps)
 const MapDefinition* findMap(const std::string& id);
+
+// Register custom maps so findMap() can locate them
+void registerCustomMaps(const std::vector<MapDefinition>& maps);
+
+// Custom map file I/O (.jmap text format)
+bool saveMapToFile(const MapDefinition& map, const std::string& filepath);
+bool loadMapFromFile(const std::string& filepath, MapDefinition& outMap);
+
+// Load all custom maps from a directory
+std::vector<MapDefinition> loadCustomMaps(const std::string& dirpath);

@@ -25,16 +25,38 @@ Rectangle {
                         color: gameController.currentTeamColor; font.pixelSize: 17; font.bold: true
                     }
                 }
-                Row {
-                    spacing: 2; visible: gameController.currentTeamRum > 0
-                    Image {
-                        source: gameController.assetsPath !== "" ?
-                            ("file://" + gameController.assetsPath + "/rum_bottle_icon.png") : ""
-                        width: 20; height: 20; fillMode: Image.PreserveAspectFit; smooth: true
+                // Rum button (clickable to use rum)
+                Rectangle {
+                    visible: gameController.currentTeamRum > 0
+                    width: rumRow.width + 8; height: 24; radius: 4
+                    color: gameController.rumUseMode ? "#604020" :
+                           (rumMA.containsMouse ? "#4a3a2a" : "transparent")
+                    border.color: gameController.rumUseMode ? "#ffaa00" : "transparent"
+                    border.width: gameController.rumUseMode ? 2 : 0
+
+                    Row {
+                        id: rumRow; anchors.centerIn: parent; spacing: 2
+                        Image {
+                            source: gameController.assetsPath !== "" ?
+                                (gameController.fileUrl("rum_bottle_icon.png")) : ""
+                            width: 18; height: 18; fillMode: Image.PreserveAspectFit; smooth: true
+                        }
+                        Text { text: "x" + gameController.currentTeamRum
+                            color: "#ffd700"; font.pixelSize: 13; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter }
                     }
-                    Text { text: "x" + gameController.currentTeamRum
-                        color: "#ffd700"; font.pixelSize: 14; font.bold: true
-                        anchors.verticalCenter: parent.verticalCenter }
+                    MouseArea {
+                        id: rumMA; anchors.fill: parent; hoverEnabled: true
+                        onClicked: {
+                            if (gameController.rumUseMode) gameController.cancelRumUse()
+                            else gameController.activateRumUse()
+                        }
+                    }
+                    ToolTip {
+                        visible: rumMA.containsMouse && !gameController.rumUseMode
+                        text: "Использовать ром"
+                        delay: 500
+                    }
                 }
             }
             Rectangle {
@@ -157,7 +179,7 @@ Rectangle {
                                         if (!modelData.isCurrentTeam) return ""
                                         var pp = gameController.portraitsPath
                                         if (pp === "") return ""
-                                        return "file://" + pp + "/" + modelData.portrait
+                                        return gameController.fileUrl("../portraits/" + modelData.portrait)
                                     }
                                     visible: modelData.isCurrentTeam && status === Image.Ready
                                     fillMode: Image.PreserveAspectCrop; smooth: true
@@ -191,11 +213,30 @@ Rectangle {
                                     }
                                 }
                                 Image {
-                                    Layout.preferredWidth: 14; Layout.preferredHeight: 14
+                                    Layout.preferredWidth: modelData.isCurrentTeam ? 28 : 16
+                                    Layout.preferredHeight: Layout.preferredWidth
+                                    Layout.maximumHeight: modelData.isCurrentTeam ? 32 : 20
                                     source: gameController.assetsPath !== "" ?
-                                        ("file://" + gameController.assetsPath + "/coin.png") : ""
+                                        (gameController.fileUrl("coin.png")) : ""
                                     visible: modelData.hasCoin
                                     fillMode: Image.PreserveAspectFit; smooth: true
+                                }
+                                // Resurrect button (visible for dead pirates when resurrection is possible)
+                                Button {
+                                    Layout.preferredWidth: 70; Layout.preferredHeight: 20
+                                    visible: modelData.canResurrect === true
+                                    text: "Воскресить"
+                                    font.pixelSize: 9
+                                    onClicked: gameController.resurrectPirate(modelData.unitIndex)
+                                    background: Rectangle {
+                                        color: parent.hovered ? "#3a8a3a" : "#2a5a2a"
+                                        radius: 3; border.color: "#60ff60"
+                                    }
+                                    contentItem: Text {
+                                        text: parent.text; color: "#80ff80"; font: parent.font
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
                                 }
                             }
 

@@ -1,4 +1,5 @@
 #include "gameserver.h"
+#include "map_def.h"
 #include <QNetworkInterface>
 #include <QJsonDocument>
 #include <QJsonArray>
@@ -212,16 +213,18 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
         }
 
         // Determine game config
-        int numTeams = 4;
-        // Count non-Closed slots
-        int activeSlots = 0;
-        for (int i = 0; i < 4; i++)
-            if (m_slots[i].state != Protocol::SlotState::Closed) activeSlots++;
-        numTeams = activeSlots;
+        // numTeams = highest active slot index + 1
+        // This ensures direct slot→team mapping (slot 0=White, 1=Yellow, etc.)
+        int numTeams = 0;
+        for (int i = 0; i < 4; i++) {
+            if (m_slots[i].state != Protocol::SlotState::Closed)
+                numTeams = i + 1;
+        }
 
         GameConfig cfg;
         cfg.numTeams = numTeams;
         cfg.teamMode = false;
+        cfg.mapId = m_mapId;
         std::random_device rd;
         cfg.seed = rd();
         m_gameSeed = cfg.seed;
@@ -368,13 +371,10 @@ void GameServer::onAITimer() {
 
 int GameServer::slotForTeam(Team team) const {
     int ti = static_cast<int>(team);
-    // Slot index maps to team index (for non-closed slots)
-    int activeIdx = 0;
-    for (int i = 0; i < 4; i++) {
-        if (m_slots[i].state == Protocol::SlotState::Closed) continue;
-        if (activeIdx == ti) return i;
-        activeIdx++;
-    }
+    // Direct mapping: slot index == team index
+    // Slot 0 = White, Slot 1 = Yellow, Slot 2 = Black, Slot 3 = Red
+    if (ti >= 0 && ti < 4 && m_slots[ti].state != Protocol::SlotState::Closed)
+        return ti;
     return -1;
 }
 
@@ -421,5 +421,12 @@ void GameServer::broadcastRoomState() {
     state["slots"] = slotsToJson();
     state["hostId"] = m_hostClientId;
     state["inGame"] = m_inGame;
+    state["maxPlayers"] = maxPlayersForMap();
     sendToAll(Protocol::makeMsg("room_state", state));
+}
+
+int GameServer::maxPlayersForMap() const {
+    const MapDefinition* md = findMap(m_mapId);
+    if (md) return md->maxPlayers;
+    return 4;
 }

@@ -1,9 +1,13 @@
 #include "gamecontroller.h"
+#include <QUrl>
 #include "boardmodel.h"
 #include "networkclient.h"
 #include "map_def.h"
 #include <QDebug>
 #include <QDir>
+#include <QFile>
+#include <QImage>
+#include <QColor>
 
 GameController::GameController(QObject* parent) : QObject(parent) {
     m_aiTimer.setSingleShot(true);
@@ -120,6 +124,12 @@ void GameController::onNetworkGameOver(QString winnerName) {
     emit gameOver(winnerName);
 }
 
+void GameController::newGameWithDensity(int numPlayers, bool teamMode, bool vsAI,
+                                        const QString& mapId, float density) {
+    m_pendingDensity = density;
+    newGame(numPlayers, teamMode, vsAI, mapId);
+}
+
 void GameController::newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId) {
     m_aiTimer.stop();
     if (numPlayers < 2) {
@@ -134,6 +144,8 @@ void GameController::newGame(int numPlayers, bool teamMode, bool vsAI, const QSt
     cfg.teamMode = teamMode;
     cfg.seed = 0;
     cfg.mapId = mapId.toStdString();
+    cfg.tileDensity = m_pendingDensity;
+    m_pendingDensity = -1.0f; // reset
 
     m_isAI = {false, false, false, false};
     if (vsAI) {
@@ -190,18 +202,34 @@ QVariantList GameController::crewStatus() const {
             m["hasCoin"] = p.carryingCoin || p.carryingGalleon;
             m["isGalleon"] = p.carryingGalleon;
             QString status;
+            QString xy = QString("(%1,%2)").arg(p.pos.col).arg(p.pos.row); // (x,y) format
             switch (p.state) {
                 case PirateState::OnShip: status = "На корабле"; break;
-                case PirateState::OnBoard:
-                    status = QString("(%1,%2)").arg(p.pos.row).arg(p.pos.col);
-                    if (p.spinnerProgress > 0) {
-                        int req = 0;
-                        if (isLand(p.pos)) req = spinnerSteps(s.tileAt(p.pos).type);
-                        status += QString(" [%1/%2]").arg(p.spinnerProgress).arg(req);
+                case PirateState::OnBoard: {
+                    // Extended status based on tile type (Improvement 6)
+                    if (s.mapIsLand(p.pos)) {
+                        auto& tile = s.tileAt(p.pos);
+                        if (tile.revealed) {
+                            if (tile.type == TileType::Trap) status = "В ловушке! " + xy;
+                            else if (tile.type == TileType::RumBarrel) status = "Пьёт ром " + xy;
+                            else if (tile.type == TileType::Fortress || tile.type == TileType::ResurrectFort) status = "В крепости " + xy;
+                            else if (tile.type == TileType::ThickJungle) status = "В джунглях " + xy;
+                            else if (isSpinner(tile.type) && p.spinnerProgress > 0) {
+                                int req = spinnerSteps(tile.type);
+                                status = xy + QString(" [%1/%2]").arg(p.spinnerProgress).arg(req);
+                            } else {
+                                status = xy;
+                            }
+                        } else {
+                            status = xy;
+                        }
+                    } else {
+                        status = xy;
                     }
                     break;
+                }
                 case PirateState::Dead: status = "Погиб"; break;
-                case PirateState::InTrap: status = "В ловушке"; break;
+                case PirateState::InTrap: status = "В ловушке! " + xy; break;
                 case PirateState::InCave: status = "В пещере"; break;
             }
             m["status"] = status;
@@ -210,6 +238,16 @@ QVariantList GameController::crewStatus() const {
             m["selected"] = (m_selectedPirate.team == static_cast<Team>(t) && m_selectedPirate.index == i);
             m["teamIdx"] = t;
             m["unitIndex"] = i;
+            // Check if this dead pirate can be resurrected (ResurrectPirate move exists)
+            bool canRes = false;
+            if (p.state == PirateState::Dead && isCurrentTeam) {
+                for (auto& mv : m_legalMoves) {
+                    if (mv.type == MoveType::ResurrectPirate && mv.pirateId.index == i) {
+                        canRes = true; break;
+                    }
+                }
+            }
+            m["canResurrect"] = canRes;
             list.append(m);
         }
     };
@@ -225,8 +263,15 @@ QVariantList GameController::crewStatus() const {
         const char* charNames[] = {"Бен Ганн", "Бен Ганн", "Бен Ганн", "Миссионер", "Пятница"};
         const char* charPortraits[] = {"ben_gann.png", "ben_gann.png", "ben_gann.png",
                                        "missioner.png", "friday.png"};
-        m["name"] = QString(charNames[ci]);
-        m["portrait"] = QString(charPortraits[ci]);
+        // Improvement 1: converted Missionary gets different name/portrait
+        QString cname = charNames[ci];
+        QString cportrait = charPortraits[ci];
+        if (ch.type == CharacterType::Missionary && ch.convertedToPirate) {
+            cname = "Миссионер (пират)";
+            cportrait = "missioner_drunk.png";
+        }
+        m["name"] = cname;
+        m["portrait"] = cportrait;
         m["team"] = static_cast<int>(ch.owner);
         m["index"] = 100 + ci;
         m["teamColor"] = QString::fromUtf8(teamColor(ch.owner));
@@ -235,7 +280,7 @@ QVariantList GameController::crewStatus() const {
         m["col"] = ch.pos.col;
         m["hasCoin"] = ch.carryingCoin || ch.carryingGalleon;
         m["isGalleon"] = ch.carryingGalleon;
-        m["status"] = ch.alive ? QString("(%1,%2)").arg(ch.pos.row).arg(ch.pos.col) : "Погиб";
+        m["status"] = ch.alive ? QString("(%1,%2)").arg(ch.pos.col).arg(ch.pos.row) : "Погиб";
         m["state"] = ch.alive ? 1 : 2;
         m["isCharacter"] = true;
         m["selected"] = (m_selectedPirate.team == ch.owner && m_selectedPirate.index == 100 + ci);
@@ -274,11 +319,11 @@ void GameController::quitToMenu() {
     emit screenChanged("main");
 }
 
-void GameController::hostGame(const QString& roomName) {
+void GameController::hostGame(const QString& roomName, int port) {
     if (m_server) { m_server->stop(); delete m_server; }
     m_server = new GameServer(this);
     m_server->setRoomName(roomName);
-    if (!m_server->start()) {
+    if (!m_server->start(static_cast<quint16>(port))) {
         emit showMessage("Не удалось запустить сервер");
         delete m_server; m_server = nullptr;
         return;
@@ -321,6 +366,7 @@ void GameController::newSandbox(int tileTypeId, int dirBits, int value) {
 
 QVariantList GameController::availableMaps() const {
     QVariantList list;
+    // Built-in maps
     auto& maps = getBuiltinMaps();
     for (auto& m : maps) {
         QVariantMap entry;
@@ -330,6 +376,24 @@ QVariantList GameController::availableMaps() const {
         entry["maxPlayers"] = m.maxPlayers;
         entry["landCells"] = m.countLandCells();
         list.append(entry);
+    }
+    // Custom maps from maps/ folder
+    if (m_boardModel) {
+        QString ap = m_boardModel->assetsPath();
+        QDir mapsDir(ap + "/../../maps");
+        if (mapsDir.exists()) {
+            auto customs = loadCustomMaps(mapsDir.absolutePath().toStdString());
+            registerCustomMaps(customs); // make findable by findMap()
+            for (auto& m : customs) {
+                QVariantMap entry;
+                entry["id"] = QString::fromStdString(m.id);
+                entry["name"] = QString::fromStdString(m.name) + " *";
+                entry["minPlayers"] = m.minPlayers;
+                entry["maxPlayers"] = m.maxPlayers;
+                entry["landCells"] = m.countLandCells();
+                list.append(entry);
+            }
+        }
     }
     return list;
 }
@@ -380,8 +444,26 @@ QVariantList GameController::sandboxTileTypes() const {
     return list;
 }
 
+
+
+QString GameController::fileUrl(const QString& relativePath) const {
+    if (!m_boardModel) return QString();
+    QString full = m_boardModel->assetsPath() + "/" + relativePath;
+    return QUrl::fromLocalFile(full).toString();
+}
 QString GameController::assetsPath() const {
     if (m_boardModel) return m_boardModel->assetsPath();
+    return "";
+}
+
+QString GameController::mapPreviewUrl(const QString& mapId) const {
+    if (!m_boardModel) return "";
+    QString ap = m_boardModel->assetsPath();
+    // Maps folder: assets/tiles/../../maps/ = project_root/maps/
+    QDir mapsDir(ap + "/../../maps");
+    QString pngPath = mapsDir.absoluteFilePath(mapId + ".png");
+    if (QFile::exists(pngPath))
+        return QUrl::fromLocalFile(pngPath).toString();
     return "";
 }
 
@@ -419,6 +501,7 @@ QString GameController::statusText() const {
     if (m_game.isGameOver())
         return QString("Победа: %1").arg(QString::fromUtf8(teamName(m_game.getWinner())));
     if (isAITurn()) return "ИИ думает...";
+    if (m_rumUseMode) return "Выберите цель для рома (кликните пирата или персонажа)";
 
     // Check if any pirate is on active spinner — hint to user
     const auto& s = m_game.state();
@@ -494,6 +577,8 @@ QVariantList GameController::pirates() const {
                              m_selectedPirate.index == i);
             m["isCurrentTeam"] = (static_cast<Team>(t) == s.currentTeam());
             m["spinnerProgress"] = p.spinnerProgress;
+            m["portrait"] = QString::fromUtf8(p.portrait.c_str());
+            m["isCharacter"] = false;
             list.append(m);
         }
     }
@@ -515,6 +600,13 @@ QVariantList GameController::pirates() const {
                          m_selectedPirate.index == 100 + ci);
         m["isCurrentTeam"] = (ch.owner == s.currentTeam());
         m["spinnerProgress"] = 0;
+        const char* charPortraits[] = {"ben_gann.png", "ben_gann.png", "ben_gann.png",
+                                       "missioner.png", "friday.png"};
+        QString cport = charPortraits[ci];
+        if (ch.type == CharacterType::Missionary && ch.convertedToPirate)
+            cport = "missioner_drunk.png";
+        m["portrait"] = cport;
+        m["isCharacter"] = true;
         list.append(m);
     }
     return list;
@@ -565,6 +657,28 @@ void GameController::cellClicked(int row, int col) {
     if (s.phase != TurnPhase::ChooseAction) {
         for (auto& c : m_validTargetCoords)
             if (c == clicked) { tryExecuteMove(clicked); return; }
+        return;
+    }
+
+    // Rum use mode: find matching UseRum move for clicked position
+    if (m_rumUseMode) {
+        for (auto& mv : m_rumMoves) {
+            Coord target = (mv.characterIndex >= 0) ? mv.to : mv.from;
+            if (target == clicked) {
+                auto events = m_game.makeMove(mv);
+                processEvents(events);
+                addLog(describeMoveResult(mv, events));
+                m_rumUseMode = false;
+                m_rumMoves.clear();
+                clearSelection();
+                m_legalMoves = m_game.getLegalMoves();
+                updateAll();
+                if (!m_game.isGameOver()) scheduleAIIfNeeded();
+                return;
+            }
+        }
+        // Clicked non-target → cancel rum mode
+        cancelRumUse();
         return;
     }
 
@@ -784,8 +898,76 @@ void GameController::doShipMove(int direction) {
 }
 
 void GameController::cancelSelection() {
+    m_rumUseMode = false;
+    m_rumMoves.clear();
     clearSelection();
     updateAll();
+}
+
+void GameController::activateRumUse() {
+    if (!m_gameActive || m_game.isGameOver() || isAITurn()) return;
+    int ti = static_cast<int>(m_game.currentTeam());
+    if (m_game.state().rumOwned[ti] <= 0) {
+        emit showMessage("Нет бутылок рома!");
+        return;
+    }
+
+    // Collect all UseRum moves
+    m_rumMoves.clear();
+    m_validTargetCoords.clear();
+    for (auto& mv : m_legalMoves) {
+        if (mv.type == MoveType::UseRum) {
+            m_rumMoves.push_back(mv);
+            if (mv.to.valid()) {
+                bool dup = false;
+                for (auto& c : m_validTargetCoords) if (c == mv.to) { dup = true; break; }
+                if (!dup) m_validTargetCoords.push_back(mv.to);
+            }
+            // For freeing trapped pirates, target is the pirate's position
+            if (mv.from.valid() && mv.characterIndex < 0) {
+                bool dup = false;
+                for (auto& c : m_validTargetCoords) if (c == mv.from) { dup = true; break; }
+                if (!dup) m_validTargetCoords.push_back(mv.from);
+            }
+        }
+    }
+
+    if (m_rumMoves.empty()) {
+        emit showMessage("Нет целей для рома");
+        return;
+    }
+
+    m_rumUseMode = true;
+    m_selectedPirate = {}; // clear pirate selection
+    emit showMessage("Выберите цель для рома (пират/персонаж)");
+    updateAll();
+}
+
+void GameController::cancelRumUse() {
+    m_rumUseMode = false;
+    m_rumMoves.clear();
+    m_validTargetCoords.clear();
+    updateAll();
+}
+
+void GameController::resurrectPirate(int pirateIndex) {
+    if (!m_gameActive || m_game.isGameOver() || isAITurn()) return;
+
+    // Find the ResurrectPirate move for this pirate
+    for (auto& mv : m_legalMoves) {
+        if (mv.type == MoveType::ResurrectPirate && mv.pirateId.index == pirateIndex) {
+            auto events = m_game.makeMove(mv);
+            processEvents(events);
+            addLog(describeMoveResult(mv, events));
+            clearSelection();
+            m_legalMoves = m_game.getLegalMoves();
+            updateAll();
+            emit showMessage("Пират воскрешён!");
+            if (!m_game.isGameOver()) scheduleAIIfNeeded();
+            return;
+        }
+    }
+    emit showMessage("Невозможно воскресить");
 }
 
 // ============================================================
@@ -882,12 +1064,12 @@ QString GameController::describeMoveResult(const Move& move, const EventList& ev
 
     switch (move.type) {
     case MoveType::MoveShip:
-        desc += QString("Корабль -> (%1,%2)").arg(move.to.row).arg(move.to.col); break;
+        desc += QString("Корабль -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
     case MoveType::DisembarkPirate:
-        desc += QString("Высадка #%1 -> (%2,%3)").arg(move.pirateId.index).arg(move.to.row).arg(move.to.col); break;
+        desc += QString("Высадка #%1 -> (%2,%3)").arg(move.pirateId.index).arg(move.to.col).arg(move.to.row); break;
     case MoveType::MovePirate:
         desc += QString("#%1 (%2,%3)->(%4,%5)").arg(move.pirateId.index)
-            .arg(move.from.row).arg(move.from.col).arg(move.to.row).arg(move.to.col); break;
+            .arg(move.from.col).arg(move.from.row).arg(move.to.col).arg(move.to.row); break;
     case MoveType::BoardShip:
         desc += QString("#%1 -> корабль").arg(move.pirateId.index); break;
     case MoveType::AdvanceSpinner:
@@ -895,16 +1077,16 @@ QString GameController::describeMoveResult(const Move& move, const EventList& ev
     case MoveType::PickupCoin:
         desc += QString("#%1 подобрал монету").arg(move.pirateId.index); break;
     case MoveType::ChooseDirection:
-        desc += QString("направление -> (%1,%2)").arg(move.to.row).arg(move.to.col); break;
+        desc += QString("направление -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
     case MoveType::ChooseHorseDest:
-        desc += QString("конь -> (%1,%2)").arg(move.to.row).arg(move.to.col); break;
+        desc += QString("конь -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
     case MoveType::MoveCharacter:
-        desc += QString("персонаж -> (%1,%2)").arg(move.to.row).arg(move.to.col); break;
+        desc += QString("персонаж -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
     case MoveType::ResurrectPirate:
         desc += QString("воскрешение #%1").arg(move.pirateId.index); break;
     case MoveType::UseRum:
         if (move.characterIndex >= 0)
-            desc += QString("ром -> персонаж (%1,%2)").arg(move.to.row).arg(move.to.col);
+            desc += QString("ром -> персонаж (%1,%2)").arg(move.to.col).arg(move.to.row);
         else
             desc += QString("ром -> освободить #%1").arg(move.pirateId.index);
         break;
@@ -939,6 +1121,49 @@ QString GameController::describeMoveResult(const Move& move, const EventList& ev
     return desc;
 }
 
+void GameController::generateMapPreview(const MapDefinition& md, const QString& pngPath) {
+    int cpx = 16;
+    int w = BOARD_SIZE * cpx, h = BOARD_SIZE * cpx;
+    QImage img(w, h, QImage::Format_RGB888);
+
+    for (int py = 0; py < h; py++) {
+        for (int px = 0; px < w; px++) {
+            int r = py / cpx, c = px / cpx;
+            QColor col;
+
+            // Ship spawn?
+            bool ship = false; int st = -1;
+            for (auto& sp : md.ships) {
+                if (sp.row == r && sp.col == c) { ship = true; st = sp.team; break; }
+            }
+
+            if (ship) {
+                switch(st) {
+                    case 0: col = QColor(220,220,220); break;
+                    case 1: col = QColor(240,208,0);   break;
+                    case 2: col = QColor(60,60,60);    break;
+                    case 3: col = QColor(208,48,48);   break;
+                    default: col = QColor(128,128,128); break;
+                }
+            } else {
+                switch(md.terrain[r][c]) {
+                    case Terrain::Sea:  col = QColor(26,96,144);  break;
+                    case Terrain::Land: col = QColor(45,90,30);   break;
+                    case Terrain::Rock: col = QColor(106,90,74);  break;
+                }
+            }
+
+            // Grid lines (darker)
+            if (px % cpx == 0 || py % cpx == 0)
+                col = col.darker(130);
+
+            img.setPixelColor(px, py, col);
+        }
+    }
+
+    img.save(pngPath, "PNG");
+}
+
 void GameController::updateAll() {
     if (m_boardModel)
         m_boardModel->update(m_game.state(), m_selectedPirate, m_validTargetCoords);
@@ -947,4 +1172,67 @@ void GameController::updateAll() {
     emit scoresChanged();
     emit boardChanged();
     emit selectionChanged();
+}
+
+void GameController::showMapEditor() {
+    emit screenChanged("editor");
+}
+
+void GameController::saveCustomMap(const QString& name, const QString& terrain, const QString& ships) {
+    MapDefinition md;
+    md.name = name.toStdString();
+    // Generate id from name (lowercase, replace spaces)
+    std::string id = name.toStdString();
+    for (auto& c : id) { if (c == ' ') c = '_'; c = tolower(c); }
+    md.id = "custom_" + id;
+
+    // Parse terrain string (rows separated by \n)
+    QStringList rows = terrain.split('\n', Qt::SkipEmptyParts);
+    for (int r = 0; r < BOARD_SIZE && r < rows.size(); r++) {
+        for (int c = 0; c < BOARD_SIZE && c < rows[r].size(); c++) {
+            QChar ch = rows[r][c];
+            if (ch == '#') md.terrain[r][c] = Terrain::Land;
+            else if (ch == 'X') md.terrain[r][c] = Terrain::Rock;
+            else md.terrain[r][c] = Terrain::Sea;
+        }
+    }
+
+    // Parse ships string (team,row,col;team,row,col;...)
+    QStringList shipParts = ships.split(';', Qt::SkipEmptyParts);
+    for (auto& sp : shipParts) {
+        QStringList vals = sp.split(',');
+        if (vals.size() >= 3) {
+            ShipSpawn ss;
+            ss.team = vals[0].toInt();
+            ss.row = vals[1].toInt();
+            ss.col = vals[2].toInt();
+            md.ships.push_back(ss);
+        }
+    }
+
+    md.minPlayers = 2;
+    md.maxPlayers = static_cast<int>(md.ships.size());
+    if (md.maxPlayers < 2) md.maxPlayers = 2;
+
+    // Save to maps directory
+    QString mapsDir;
+    if (m_boardModel) {
+        QString ap = m_boardModel->assetsPath();
+        QDir d(ap + "/../../maps");
+        if (!d.exists()) d.mkpath(".");
+        mapsDir = d.absolutePath();
+    } else {
+        mapsDir = QDir::homePath() + "/Documents/VS_Code/Jacal/maps";
+        QDir(mapsDir).mkpath(".");
+    }
+
+    QString filepath = mapsDir + "/" + QString::fromStdString(md.id) + ".jmap";
+    if (saveMapToFile(md, filepath.toStdString())) {
+        // Generate PNG preview
+        QString pngPath = mapsDir + "/" + QString::fromStdString(md.id) + ".png";
+        generateMapPreview(md, pngPath);
+        emit showMessage("Карта сохранена: " + filepath);
+    } else {
+        emit showMessage("Ошибка сохранения карты!");
+    }
 }

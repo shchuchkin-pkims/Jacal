@@ -1,6 +1,7 @@
 #include "boardmodel.h"
 #include <QCoreApplication>
 #include <QDir>
+#include <QUrl>
 #include <QFileInfo>
 
 BoardModel::BoardModel(QObject* parent) : QAbstractListModel(parent) {
@@ -118,8 +119,8 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
     case ImageSourceRole: {
         if (!m_hasState || !m_state.mapIsLand(coord) || m_assetsPath.isEmpty()) return QString("");
         const auto& tile = m_state.board[r][c];
-        if (!tile.revealed) return QString("file://" + m_assetsPath + "/closed.png");
-        return QString("file://" + tileImagePath(tile));
+        if (!tile.revealed) return QString(QUrl::fromLocalFile(m_assetsPath + "/closed.png").toString());
+        return QString(QUrl::fromLocalFile(tileImagePath(tile)).toString());
     }
 
     case SpinnerStepsRole:
@@ -148,11 +149,11 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
         if (tile.type == TileType::Arrow) {
             int ndirs = popcount8(tile.directionBits);
             if (ndirs == 1) {
-                // Single-direction: image points East. Snap to 90° only.
+                // Single-direction: image points East. Snap to 90В° only.
                 // Cardinal dirs only in the actual game.
                 for (int d = 0; d < 8; d++) {
                     if (tile.directionBits & dirBit(d)) {
-                        // N(0)→-90, E(2)→0, S(4)→90, W(6)→180
+                        // N(0)в†’-90, E(2)в†’0, S(4)в†’90, W(6)в†’180
                         // For diagonal dirs, snap to nearest cardinal
                         int snapAngles[] = {-90, -90, 0, 90, 90, 90, 180, -90};
                         return static_cast<double>(snapAngles[d]);
@@ -172,7 +173,7 @@ QVariant BoardModel::data(const QModelIndex& index, int role) const {
             return static_cast<double>(tile.rotation * 90);
         }
         if (tile.type == TileType::Cannon) {
-            // Cannon image points North. Snap to 90° only.
+            // Cannon image points North. Snap to 90В° only.
             for (int d = 0; d < 8; d++) {
                 if (tile.directionBits & dirBit(d)) {
                     int snapAngles[] = {0, 0, 90, 90, 180, 180, 270, 270};
@@ -292,8 +293,9 @@ QString BoardModel::tileImagePath(const Tile& tile) const {
     case TileType::Missionary:    return base + "missionary.png";
     case TileType::Friday:        return base + "friday.png";
     case TileType::Rum:
-        if (tile.rumBottles >= 3) return base + "rum_3.png";
-        if (tile.rumBottles == 2) return base + "rum_2.png";
+        // visualVariant stores original bottle count (doesn't change after pickup)
+        if (tile.visualVariant >= 3) return base + "rum_3.png";
+        if (tile.visualVariant == 2) return base + "rum_2.png";
         return base + "rum.png";
     case TileType::RumBarrel:     return base + "rum_barrel.png";
     case TileType::Cave:          return base + "cave.png";

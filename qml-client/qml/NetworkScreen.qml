@@ -25,15 +25,22 @@ Rectangle {
         // Direct connect
         RowLayout {
             Layout.fillWidth: true; spacing: 8
-            Text { text: "IP адрес:"; color: "#ccc"; font.pixelSize: 14 }
+            Text { text: "IP:"; color: "#ccc"; font.pixelSize: 14 }
             TextField {
                 id: ipField; Layout.fillWidth: true
                 text: "localhost"; color: "white"; font.pixelSize: 14
                 background: Rectangle { color: "#1a3a5a"; radius: 4; border.color: "#4a7aba" }
             }
+            Text { text: "Порт:"; color: "#ccc"; font.pixelSize: 14 }
+            TextField {
+                id: portField; width: 70
+                text: "12345"; color: "white"; font.pixelSize: 14
+                validator: IntValidator { bottom: 1; top: 65535 }
+                background: Rectangle { color: "#1a3a5a"; radius: 4; border.color: "#4a7aba" }
+            }
             Button {
-                text: "Подключиться"; width: 140
-                onClicked: networkClient.connectToServer(ipField.text)
+                text: "Подключиться"; width: 130
+                onClicked: networkClient.connectToServer(ipField.text, parseInt(portField.text))
                 background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5 }
                 contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 13
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
@@ -49,11 +56,17 @@ Rectangle {
                 text: "Jacal Game"; color: "white"; font.pixelSize: 14
                 background: Rectangle { color: "#1a3a5a"; radius: 4; border.color: "#4a7aba" }
             }
+            Text { text: "Порт:"; color: "#ccc"; font.pixelSize: 14 }
+            TextField {
+                id: hostPortField; width: 70
+                text: "12345"; color: "white"; font.pixelSize: 14
+                validator: IntValidator { bottom: 1; top: 65535 }
+                background: Rectangle { color: "#1a3a5a"; radius: 4; border.color: "#4a7aba" }
+            }
             Button {
-                text: "Создать игру"; width: 140
+                text: "Создать игру"; width: 130
                 onClicked: {
-                    gameController.hostGame(roomNameField.text)
-                    // Auto-join own server after short delay
+                    gameController.hostGame(roomNameField.text, parseInt(hostPortField.text))
                     autoJoinTimer.start()
                 }
                 background: Rectangle { color: parent.hovered ? "#4a8a4a" : "#2a6a2a"; radius: 5 }
@@ -66,7 +79,7 @@ Rectangle {
         Timer {
             id: autoJoinTimer
             interval: 300; repeat: false
-            onTriggered: networkClient.connectToServer("localhost")
+            onTriggered: networkClient.connectToServer("localhost", parseInt(hostPortField.text))
         }
 
         // LAN server list header + Refresh button
@@ -324,19 +337,75 @@ Rectangle {
             }
         }
 
-        // ===== RIGHT HALF: reserved for map preview =====
+        // ===== RIGHT HALF: Map preview + info =====
         Rectangle {
+            id: rightPanel
             anchors.top: lobbyTitle.bottom; anchors.topMargin: 12
             anchors.left: leftPanel.right; anchors.leftMargin: 12
             anchors.right: parent.right
             anchors.bottom: lobbyButtons.top; anchors.bottomMargin: 10
             color: "#12253a"; radius: 6
 
-            Text {
-                anchors.centerIn: parent
-                text: "Превью карты\n(скоро)"
-                color: "#335"; font.pixelSize: 16
-                horizontalAlignment: Text.AlignHCenter
+            Column {
+                anchors.fill: parent; anchors.margins: 12; spacing: 8
+
+                Text {
+                    text: "Превью карты"
+                    color: "#aaa"; font.pixelSize: 14; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                // Map name
+                Text {
+                    property string selMapId: {
+                        if (!lobbyMapSelector.mapIds || lobbyMapSelector.mapIds.length === 0) return "classic"
+                        return lobbyMapSelector.mapIds[lobbyMapSelector.currentIndex] || "classic"
+                    }
+                    id: mapNameLabel
+                    text: lobbyMapSelector.displayText || "Classic Island"
+                    color: "#ffd700"; font.pixelSize: 16; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                // Preview image
+                Image {
+                    id: mapPreviewImg
+                    width: Math.min(parent.width - 20, parent.height - 100)
+                    height: width
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    source: gameController.mapPreviewUrl(mapNameLabel.selMapId)
+                    visible: status === Image.Ready
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false // pixel art style
+                }
+
+                // Fallback if no preview
+                Rectangle {
+                    width: mapPreviewImg.width; height: mapPreviewImg.height
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    visible: !mapPreviewImg.visible
+                    color: "#1a3050"; radius: 4
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Нет превью"
+                        color: "#445"; font.pixelSize: 14
+                    }
+                }
+
+                // Map info
+                Text {
+                    property var mapInfo: {
+                        var maps = gameController.availableMaps()
+                        var id = mapNameLabel.selMapId
+                        for (var i = 0; i < maps.length; i++)
+                            if (maps[i].id === id) return maps[i]
+                        return null
+                    }
+                    text: mapInfo ? ("Суша: " + mapInfo.landCells + " клеток | Игроки: " +
+                          mapInfo.minPlayers + "-" + mapInfo.maxPlayers) : ""
+                    color: "#888"; font.pixelSize: 11
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
             }
         }
 

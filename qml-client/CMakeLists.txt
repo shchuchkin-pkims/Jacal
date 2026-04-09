@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Core Quick Gui Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Quick Gui Network QuickControls2)
 
 qt_add_executable(jackal
     main.cpp
@@ -14,6 +14,12 @@ qt_add_executable(jackal
     src/updatechecker.h
     src/protocol.h
     qml.qrc
+    icon.qrc
+)
+
+# Hide console window on Windows (GUI app, not console)
+set_target_properties(jackal PROPERTIES
+    WIN32_EXECUTABLE TRUE
 )
 
 target_link_libraries(jackal PRIVATE
@@ -22,6 +28,7 @@ target_link_libraries(jackal PRIVATE
     Qt6::Quick
     Qt6::Gui
     Qt6::Network
+    Qt6::QuickControls2
 )
 
 target_include_directories(jackal PRIVATE

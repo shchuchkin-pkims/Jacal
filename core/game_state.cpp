@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <random>
 
-std::vector<Tile> createDeck(uint32_t seed, int landCount) {
+std::vector<Tile> createDeck(uint32_t seed, int landCount, float tileDensity) {
     std::vector<Tile> deck;
     deck.reserve(landCount);
 
@@ -94,12 +94,13 @@ std::vector<Tile> createDeck(uint32_t seed, int landCount) {
     // Friday (1)
     { Tile t; t.type = TileType::Friday; deck.push_back(t); }
 
-    // Rum: 3 tiles × 3 bottles + 2 tiles × 2 bottles = 13 bottles
+    // Rum: 3 tiles × 3 bottles + 2 tiles × 2 bottles + ? tiles × 1 bottle
+    // visualVariant stores ORIGINAL bottle count for image display
     for (int i = 0; i < 3; i++) {
-        Tile t; t.type = TileType::Rum; t.rumBottles = 3; deck.push_back(t);
+        Tile t; t.type = TileType::Rum; t.rumBottles = 3; t.visualVariant = 3; deck.push_back(t);
     }
     for (int i = 0; i < 2; i++) {
-        Tile t; t.type = TileType::Rum; t.rumBottles = 2; deck.push_back(t);
+        Tile t; t.type = TileType::Rum; t.rumBottles = 2; t.visualVariant = 2; deck.push_back(t);
     }
 
     // RumBarrel (4)
@@ -118,6 +119,49 @@ std::vector<Tile> createDeck(uint32_t seed, int landCount) {
 
     // Grass (2)
     add(TileType::Grass, 2);
+
+    // Apply tile density: trim non-empty tiles if density < default
+    // Default ratio: ~100 filled / 117 total ≈ 0.855
+    // density -1.0 = default, 0.0 = 1 treasure + rest empty, 1.0 = no empty
+    int filledCount = static_cast<int>(deck.size());
+    int defaultEmpty = landCount - filledCount;
+    float defaultDensity = (landCount > 0) ? static_cast<float>(filledCount) / landCount : 0.85f;
+
+    if (tileDensity >= 0.0f && tileDensity < defaultDensity) {
+        // Reduce filled tiles. Keep at least 1 treasure + 1 galleon.
+        int targetFilled = std::max(2, static_cast<int>(tileDensity * landCount));
+        // Shuffle first so removal is random
+        std::mt19937 preRng(seed ? seed + 999 : std::random_device{}());
+        std::shuffle(deck.begin(), deck.end(), preRng);
+        // Separate essential (treasure/galleon) from optional
+        std::vector<Tile> essential, optional;
+        bool hasTreasure = false;
+        for (auto& t : deck) {
+            if (!hasTreasure && (t.type == TileType::Treasure || t.type == TileType::Galleon)) {
+                essential.push_back(t);
+                hasTreasure = true;
+            } else if (static_cast<int>(essential.size() + optional.size()) < targetFilled) {
+                if (t.type == TileType::Treasure || t.type == TileType::Galleon)
+                    essential.push_back(t);
+                else
+                    optional.push_back(t);
+            }
+        }
+        deck.clear();
+        deck.insert(deck.end(), essential.begin(), essential.end());
+        deck.insert(deck.end(), optional.begin(), optional.end());
+        // Trim to target
+        if (static_cast<int>(deck.size()) > targetFilled)
+            deck.resize(targetFilled);
+    } else if (tileDensity > defaultDensity) {
+        // More filled: duplicate some tiles (proportionally)
+        int targetFilled = std::min(landCount, static_cast<int>(tileDensity * landCount));
+        std::mt19937 dupRng(seed ? seed + 777 : std::random_device{}());
+        while (static_cast<int>(deck.size()) < targetFilled && !deck.empty()) {
+            int idx = dupRng() % deck.size();
+            deck.push_back(deck[idx]);
+        }
+    }
 
     // Fill remaining with Empty
     int remaining = landCount - static_cast<int>(deck.size());
@@ -222,9 +266,11 @@ void initializeBoard(GameState& state, const GameConfig& config) {
                 t.treasureValue = vals[sandboxTileCounter % 14];
             }
 
-            // Rum: assign bottle count
+            // Rum: cycle through 1, 2, 3 bottles
             if (config.sandboxTile == TileType::Rum) {
-                t.rumBottles = (sandboxTileCounter % 2 == 0) ? 3 : 2;
+                int bottles = (sandboxTileCounter % 3) + 1; // 1, 2, 3
+                t.rumBottles = bottles;
+                t.visualVariant = bottles;
             }
 
             sandboxTileCounter++;
@@ -281,12 +327,12 @@ void initializeBoard(GameState& state, const GameConfig& config) {
         // Missionary: add Friday and Rum
         if (config.sandboxTile == TileType::Missionary) {
             placeExtra(4, 5, TileType::Friday, false);
-            placeExtra(4, 7, TileType::Rum, false); state.board[4][7].rumBottles = 2;
+            placeExtra(4, 7, TileType::Rum, false); state.board[4][7].rumBottles = 2; state.board[4][7].visualVariant = 2;
         }
 
         // Friday: add rum, traps, spinners, cannibal, resurrect fort
         if (config.sandboxTile == TileType::Friday) {
-            placeExtra(4, 4, TileType::Rum, false); state.board[4][4].rumBottles = 1;
+            placeExtra(4, 4, TileType::Rum, false); state.board[4][4].rumBottles = 1; state.board[4][4].visualVariant = 1;
             placeExtra(4, 5, TileType::Trap, false);
             placeExtra(4, 7, TileType::Jungle, false);
             placeExtra(4, 8, TileType::Cannibal, false);
@@ -316,7 +362,7 @@ void initializeBoard(GameState& state, const GameConfig& config) {
     } else {
         // === NORMAL MODE — place tiles on all land cells ===
         int landCount = mapDef->countLandCells();
-        auto deck = createDeck(config.seed, landCount);
+        auto deck = createDeck(config.seed, landCount, config.tileDensity);
         int idx = 0;
         for (int r = 0; r < BOARD_SIZE; r++)
             for (int c = 0; c < BOARD_SIZE; c++) {
@@ -367,12 +413,12 @@ void initializeBoard(GameState& state, const GameConfig& config) {
     // white: 1=M,2=M,3=F,4=M  → index 2 is female
     // yellow: 1=M,2=F,3=M,4=M → index 1 is female
     // black: 1=M,2=F,3=M,4=F  → index 1 is female
-    // red: 1=M,2=M,3=M,4=F    → all 3 pirates male (4th is spare)
+    // Each team has at least 1 female pirate
     static const bool femaleMap[4][PIRATES_PER_TEAM] = {
-        {false, false, true},   // white: pirate 0=M, 1=M, 2=F
-        {false, true,  false},  // yellow: 0=M, 1=F, 2=M
-        {false, true,  false},  // black: 0=M, 1=F, 2=M
-        {false, false, false},  // red: 0=M, 1=M, 2=M
+        {false, false, true},   // white: pirate 0=M, 1=M, 2=F (white_3_female.png)
+        {false, true,  false},  // yellow: 0=M, 1=F, 2=M (yellow_2_female.png)
+        {false, true,  false},  // black: 0=M, 1=F, 2=M (black_2_female.png)
+        {false, false, true},   // red: 0=M, 1=M, 2=F (red_3_female.png)
     };
     static const char* teamPrefix[] = {"white", "yellow", "black", "red"};
 

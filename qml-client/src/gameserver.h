@@ -37,6 +37,8 @@ public:
 
     void setRoomName(const QString& name) { m_roomName = name; }
     QString roomName() const { return m_roomName; }
+    void setMapId(const QString& id) { m_mapId = id.toStdString(); }
+    int maxPlayersForMap() const;
 
 signals:
     void logMessage(const QString& msg);
@@ -67,6 +69,7 @@ private:
     QTimer m_aiTimer;
     quint16 m_port = Protocol::DEFAULT_PORT;
     QString m_roomName = "Jacal Game";
+    std::string m_mapId = "classic";
 
     int m_nextClientId = 1;
     QMap<int, ClientInfo> m_clients;

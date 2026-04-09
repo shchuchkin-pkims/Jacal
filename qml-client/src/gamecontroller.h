@@ -30,6 +30,7 @@ class GameController : public QObject {
     Q_PROPERTY(QStringList moveLog READ moveLog NOTIFY logChanged)
     Q_PROPERTY(QVariantList crewStatus READ crewStatus NOTIFY boardChanged)
     Q_PROPERTY(int currentTeamRum READ currentTeamRum NOTIFY boardChanged)
+    Q_PROPERTY(bool rumUseMode READ rumUseMode NOTIFY selectionChanged)
 
 public:
     explicit GameController(QObject* parent = nullptr);
@@ -38,6 +39,7 @@ public:
     void setNetworkClient(class NetworkClient* nc);
 
     Q_INVOKABLE void newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId = "classic");
+    Q_INVOKABLE void newGameWithDensity(int numPlayers, bool teamMode, bool vsAI, const QString& mapId, float density);
     Q_INVOKABLE void newSandbox(int tileTypeId, int dirBits, int value);
     Q_INVOKABLE QVariantList sandboxTileTypes() const;
     Q_INVOKABLE QVariantList availableMaps() const;
@@ -45,9 +47,14 @@ public:
     Q_INVOKABLE void moveShipLeft();
     Q_INVOKABLE void moveShipRight();
     Q_INVOKABLE void cancelSelection();
-    Q_INVOKABLE void hostGame(const QString& roomName);
-    Q_INVOKABLE void showNetworkScreen();
+    Q_INVOKABLE void activateRumUse();
+    Q_INVOKABLE void cancelRumUse();
+    Q_INVOKABLE void resurrectPirate(int pirateIndex);
+    Q_INVOKABLE void hostGame(const QString& roomName, int port = 12345);
+    Q_INVOKABLE void saveCustomMap(const QString& name, const QString& terrain, const QString& ships);
     Q_INVOKABLE void showMainMenu();
+    Q_INVOKABLE void showMapEditor();
+    Q_INVOKABLE void showNetworkScreen();
 
     bool gameActive() const { return m_gameActive; }
     QString currentTeamName() const;
@@ -59,9 +66,12 @@ public:
     QVariantList pirates() const;
     QVariantList shipList() const;
     QVariantList validTargets() const;
-    bool hasSelection() const { return m_selectedPirate.valid(); }
+    bool hasSelection() const { return m_selectedPirate.valid() || m_rumUseMode; }
     bool isAITurn() const;
+    bool rumUseMode() const { return m_rumUseMode; }
     QString assetsPath() const;
+    Q_INVOKABLE QString fileUrl(const QString& relativePath) const;
+    Q_INVOKABLE QString mapPreviewUrl(const QString& mapId) const;
     QString portraitsPath() const;
     QStringList moveLog() const { return m_moveLog; }
     QVariantList crewStatus() const;
@@ -97,6 +107,7 @@ private:
     void scheduleAIIfNeeded();
     void addLog(const QString& msg);
     QString describeMoveResult(const Move& move, const EventList& events);
+    void generateMapPreview(const MapDefinition& md, const QString& pngPath);
 
     Game m_game;
     BoardModel* m_boardModel = nullptr;
@@ -107,10 +118,13 @@ private:
     std::vector<Move> m_movesForSelected;
     std::vector<Coord> m_validTargetCoords;
     QStringList m_moveLog;
+    bool m_rumUseMode = false;
+    std::vector<Move> m_rumMoves; // UseRum moves available
 
     // AI
     std::array<bool, MAX_TEAMS> m_isAI = {};
     QTimer m_aiTimer;
+    float m_pendingDensity = -1.0f;
 
     // Network
     GameServer* m_server = nullptr;

@@ -90,6 +90,14 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 }
 
+                Button {
+                    width: parent.width; height: 42; text: "Редактор карт"; font.pixelSize: 16
+                    onClicked: gameController.showMapEditor()
+                    background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                    contentItem: Text { text: parent.text; color: "white"; font: parent.font
+                        horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                }
+
                 Item { width: 1; height: 4 }
 
                 Button {
@@ -117,6 +125,7 @@ ApplicationWindow {
 
             // ========== SINGLE PLAYER SUBMENU ==========
             Column {
+                id: singlePlayerMenu
                 width: parent.width
                 spacing: 8
                 visible: startScreen.menuState === "single"
@@ -152,21 +161,71 @@ ApplicationWindow {
                     }
                 }
 
+                // Map preview
+                Image {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    width: Math.min(parent.width * 0.6, 150); height: width
+                    source: gameController.mapPreviewUrl(mapSelector.selectedMapId)
+                    visible: status === Image.Ready
+                    fillMode: Image.PreserveAspectFit
+                    smooth: false
+                }
+
+                // Tile density slider (Improvement 4)
+                RowLayout {
+                    width: parent.width; spacing: 6
+                    Text { text: "Плотность:"; color: "#aaa"; font.pixelSize: 12
+                        Layout.alignment: Qt.AlignVCenter }
+                    Slider {
+                        id: densitySlider
+                        Layout.fillWidth: true; height: 28
+                        from: 0.0; to: 1.0; value: 0.85; stepSize: 0.05
+                        // 0.85 ≈ default ratio (100 filled / 117 tiles)
+                    }
+                    Text { text: Math.round(densitySlider.value * 100) + "%"
+                        color: "#ffd700"; font.pixelSize: 12; font.bold: true
+                        Layout.alignment: Qt.AlignVCenter; Layout.preferredWidth: 35 }
+                }
+                Text {
+                    text: densitySlider.value < 0.2 ? "Почти пустой остров" :
+                          densitySlider.value > 0.95 ? "Максимум событий!" :
+                          densitySlider.value < 0.5 ? "Спокойная игра" : "Стандарт"
+                    color: "#888"; font.pixelSize: 10
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+
+                // Game mode buttons (filtered by map maxPlayers, Bug 6)
+                property int mapMaxPlayers: {
+                    var maps = gameController.availableMaps();
+                    for (var i = 0; i < maps.length; i++)
+                        if (maps[i].id === mapSelector.selectedMapId) return maps[i].maxPlayers;
+                    return 4;
+                }
+
                 Repeater {
                     model: [
-                        {text: "1 vs ИИ (дуэль, 2 корабля)",  players: 2, team: false, ai: true},
-                        {text: "2 игрока (дуэль, 2 корабля)",  players: 2, team: false, ai: false},
-                        {text: "1 vs ИИ (команды 2x2)",        players: 4, team: true,  ai: true},
-                        {text: "2 игрока (команды 2x2)",        players: 4, team: true,  ai: false},
-                        {text: "3 игрока",                      players: 3, team: false, ai: false},
-                        {text: "4 игрока",                      players: 4, team: false, ai: false}
+                        {text: "1 vs ИИ (дуэль)",          players: 2, team: false, ai: true},
+                        {text: "2 игрока (дуэль)",          players: 2, team: false, ai: false},
+                        {text: "1 vs ИИ (команды 2x2)",     players: 4, team: true,  ai: true},
+                        {text: "2 игрока (команды 2x2)",     players: 4, team: true,  ai: false},
+                        {text: "3 игрока",                   players: 3, team: false, ai: false},
+                        {text: "4 игрока",                   players: 4, team: false, ai: false}
                     ]
                     Button {
-                        width: parent.width; height: 38
-                        text: modelData.text; font.pixelSize: 14
-                        onClicked: gameController.newGame(modelData.players, modelData.team, modelData.ai, mapSelector.selectedMapId)
-                        background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
-                        contentItem: Text { text: parent.text; color: "white"; font: parent.font
+                        width: parent.width; height: 36
+                        text: modelData.text; font.pixelSize: 13
+                        visible: modelData.players <= singlePlayerMenu.mapMaxPlayers
+                        enabled: modelData.players <= singlePlayerMenu.mapMaxPlayers
+                        onClicked: gameController.newGameWithDensity(
+                            modelData.players, modelData.team, modelData.ai,
+                            mapSelector.selectedMapId, densitySlider.value)
+                        background: Rectangle {
+                            color: parent.enabled ? (parent.hovered ? "#3a6a9a" : "#2a4a6a") : "#1a2a3a"
+                            radius: 5; border.color: parent.enabled ? "#5a8aba" : "#3a4a5a"
+                        }
+                        contentItem: Text { text: parent.text
+                            color: parent.enabled ? "white" : "#555"
+                            font: parent.font
                             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     }
                 }
@@ -248,6 +307,13 @@ ApplicationWindow {
         visible: false
     }
 
+    // ===== MAP EDITOR =====
+    MapEditor {
+        id: mapEditor
+        anchors.fill: parent
+        visible: false
+    }
+
     // ===== UPDATE DIALOG =====
     Rectangle {
         id: updateDialog
@@ -313,12 +379,10 @@ ApplicationWindow {
     Connections {
         target: gameController
         function onScreenChanged(screen) {
-            if (screen === "network") {
-                networkScreen.visible = true
-                startScreen.visible = false
-            } else if (screen === "main") {
-                networkScreen.visible = false
-                startScreen.visible = true
+            networkScreen.visible = (screen === "network")
+            mapEditor.visible = (screen === "editor")
+            startScreen.visible = (screen === "main")
+            if (screen === "main") {
                 startScreen.menuState = "main"
                 networkClient.stopLanDiscovery()
             }

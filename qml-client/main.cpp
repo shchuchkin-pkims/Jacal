@@ -1,6 +1,8 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickStyle>
+#include <QIcon>
 #include "gamecontroller.h"
 #include "boardmodel.h"
 #include "networkclient.h"
@@ -8,9 +10,11 @@
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
+    QQuickStyle::setStyle("Basic");
     app.setApplicationName("Jacal");
     app.setOrganizationName("Jacal");
     app.setApplicationVersion(Protocol::APP_VERSION);
+    app.setWindowIcon(QIcon(":/logo.png"));
 
     GameController controller;
     BoardModel boardModel;

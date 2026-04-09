@@ -6,5 +6,6 @@
         <file>qml/TileItem.qml</file>
         <file>qml/HUD.qml</file>
         <file>qml/NetworkScreen.qml</file>
+        <file>qml/MapEditor.qml</file>
     </qresource>
 </RCC>
