@@ -8,8 +8,8 @@
 namespace Protocol {
 
 // Current version
-inline const char* APP_VERSION = "0.2.0";
-inline const char* GITHUB_REPO = "JacalGame/Jacal"; // owner/repo
+inline const char* APP_VERSION = "0.1.0";
+inline const char* GITHUB_REPO = "shchuchkin-pkims/Jacal"; // owner/repo
 inline quint16 DEFAULT_PORT = 12345;
 inline quint16 BROADCAST_PORT = 12346;
 inline const char* BROADCAST_MAGIC = "JACAL_SERVER_V1";

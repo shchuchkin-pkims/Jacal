@@ -226,6 +226,16 @@ Rectangle {
                                 visible: modelData.state === "player"
                             }
 
+                            // Swap slot button (for open slots)
+                            Button {
+                                visible: modelData.state === "open" && networkClient.mySlot !== index
+                                width: 56; height: 22; text: "Занять"; font.pixelSize: 10
+                                onClicked: networkClient.requestSwapSlot(index)
+                                background: Rectangle { color: parent.hovered ? "#3a6a3a" : "#2a4a2a"; radius: 3 }
+                                contentItem: Text { text: parent.text; color: "#aaffaa"; font: parent.font
+                                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            }
+
                             // Host: dropdown to change slot state
                             ComboBox {
                                 visible: networkClient.isHost && modelData.state !== "player"
@@ -256,33 +266,56 @@ Rectangle {
                 id: mapPanel
                 anchors.top: slotsPanel.bottom; anchors.topMargin: 8
                 anchors.left: parent.left; anchors.right: parent.right
-                height: networkClient.isHost ? 40 : 0; visible: networkClient.isHost
+                height: networkClient.isHost ? mapPanelCol.height + 16 : 0
+                visible: networkClient.isHost
                 color: "#1a3050"; radius: 6
 
-                RowLayout {
-                    anchors.fill: parent; anchors.margins: 8; spacing: 8
-                    Text { text: "Карта:"; color: "#aaa"; font.pixelSize: 13 }
-                    ComboBox {
-                        id: lobbyMapSelector
-                        Layout.fillWidth: true; height: 28
-                        model: {
-                            var maps = gameController.availableMaps()
-                            var names = []
-                            for (var i = 0; i < maps.length; i++) names.push(maps[i].name)
-                            return names
+                Column {
+                    id: mapPanelCol
+                    anchors.left: parent.left; anchors.right: parent.right
+                    anchors.top: parent.top; anchors.margins: 8
+                    spacing: 4
+
+                    RowLayout {
+                        width: parent.width; spacing: 8
+                        Text { text: "Карта:"; color: "#aaa"; font.pixelSize: 13 }
+                        ComboBox {
+                            id: lobbyMapSelector
+                            Layout.fillWidth: true; height: 28
+                            model: {
+                                var maps = gameController.availableMaps()
+                                var names = []
+                                for (var i = 0; i < maps.length; i++) names.push(maps[i].name)
+                                return names
+                            }
+                            property var mapIds: {
+                                var maps = gameController.availableMaps()
+                                var ids = []
+                                for (var i = 0; i < maps.length; i++) ids.push(maps[i].id)
+                                return ids
+                            }
+                            currentIndex: 0
+                            background: Rectangle { color: "#2a3a5a"; radius: 3; border.color: "#4a6a8a" }
+                            contentItem: Text {
+                                text: lobbyMapSelector.displayText; color: "#ccc"; font.pixelSize: 12
+                                leftPadding: 6; verticalAlignment: Text.AlignVCenter
+                            }
                         }
-                        property var mapIds: {
-                            var maps = gameController.availableMaps()
-                            var ids = []
-                            for (var i = 0; i < maps.length; i++) ids.push(maps[i].id)
-                            return ids
+                    }
+
+                    // Tile density slider
+                    RowLayout {
+                        width: parent.width; spacing: 6
+                        Text { text: "Плотность:"; color: "#aaa"; font.pixelSize: 11
+                            Layout.alignment: Qt.AlignVCenter }
+                        Slider {
+                            id: lobbyDensitySlider
+                            Layout.fillWidth: true; height: 24
+                            from: 0.0; to: 1.0; value: 0.85; stepSize: 0.05
                         }
-                        currentIndex: 0
-                        background: Rectangle { color: "#2a3a5a"; radius: 3; border.color: "#4a6a8a" }
-                        contentItem: Text {
-                            text: lobbyMapSelector.displayText; color: "#ccc"; font.pixelSize: 12
-                            leftPadding: 6; verticalAlignment: Text.AlignVCenter
-                        }
+                        Text { text: Math.round(lobbyDensitySlider.value * 100) + "%"
+                            color: "#ffd700"; font.pixelSize: 11; font.bold: true
+                            Layout.alignment: Qt.AlignVCenter; Layout.preferredWidth: 30 }
                     }
                 }
             }
@@ -427,7 +460,12 @@ Rectangle {
             Button {
                 text: "Начать игру"; Layout.fillWidth: true
                 visible: networkClient.isHost
-                onClicked: networkClient.requestStartGame()
+                onClicked: {
+                    var mapId = "classic"
+                    if (lobbyMapSelector.mapIds && lobbyMapSelector.mapIds.length > 0)
+                        mapId = lobbyMapSelector.mapIds[lobbyMapSelector.currentIndex]
+                    networkClient.requestStartGame(mapId, lobbyDensitySlider.value)
+                }
                 background: Rectangle { color: parent.hovered ? "#6a8a3a" : "#4a6a2a"; radius: 5 }
                 contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 14
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }

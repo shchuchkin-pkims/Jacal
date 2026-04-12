@@ -49,8 +49,17 @@ void NetworkClient::toggleReady() {
     send(Protocol::makeMsg("ready"));
 }
 
-void NetworkClient::requestStartGame() {
-    send(Protocol::makeMsg("start_game"));
+void NetworkClient::requestStartGame(const QString& mapId, float density) {
+    QJsonObject data;
+    data["mapId"] = mapId;
+    data["density"] = density;
+    send(Protocol::makeMsg("start_game", data));
+}
+
+void NetworkClient::requestSwapSlot(int targetSlot) {
+    QJsonObject data;
+    data["slot"] = targetSlot;
+    send(Protocol::makeMsg("swap_slot", data));
 }
 
 void NetworkClient::sendMove(const QJsonObject& moveJson) {
@@ -195,12 +204,16 @@ void NetworkClient::handleMessage(const QJsonObject& msg) {
         int seed = msg["seed"].toInt();
         int numTeams = msg["numTeams"].toInt();
         bool teamMode = msg["teamMode"].toBool();
+        QString mapId = msg["mapId"].toString("classic");
+        float density = static_cast<float>(msg["density"].toDouble(-1.0));
 
-        // Create local game with same seed
+        // Create local game with same seed and map
         GameConfig cfg;
         cfg.numTeams = numTeams;
         cfg.teamMode = teamMode;
         cfg.seed = static_cast<uint32_t>(seed);
+        cfg.mapId = mapId.toStdString();
+        cfg.tileDensity = density;
         m_game.newGame(cfg);
         m_inGame = true;
         m_currentTeam = static_cast<int>(m_game.currentTeam());

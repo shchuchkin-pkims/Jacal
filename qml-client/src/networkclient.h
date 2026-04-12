@@ -31,7 +31,8 @@ public:
     Q_INVOKABLE void sendChat(const QString& text);
     Q_INVOKABLE void setSlot(int slot, const QString& state);
     Q_INVOKABLE void toggleReady();
-    Q_INVOKABLE void requestStartGame();
+    Q_INVOKABLE void requestStartGame(const QString& mapId = "classic", float density = -1.0f);
+    Q_INVOKABLE void requestSwapSlot(int targetSlot);
     Q_INVOKABLE void sendMove(const QJsonObject& moveJson);
     Q_INVOKABLE void startLanDiscovery();
     Q_INVOKABLE void stopLanDiscovery();

@@ -1,6 +1,7 @@
 #include "game_state.h"
 #include <algorithm>
 #include <random>
+#include <set>
 
 std::vector<Tile> createDeck(uint32_t seed, int landCount, float tileDensity) {
     std::vector<Tile> deck;
@@ -324,10 +325,11 @@ void initializeBoard(GameState& state, const GameConfig& config) {
             placeExtra(7, 7, TileType::Cave, false); state.board[7][7].caveId = 1;
         }
 
-        // Missionary: add Friday and Rum
+        // Missionary: add Friday, Rum and RumBarrel
         if (config.sandboxTile == TileType::Missionary) {
             placeExtra(4, 5, TileType::Friday, false);
             placeExtra(4, 7, TileType::Rum, false); state.board[4][7].rumBottles = 2; state.board[4][7].visualVariant = 2;
+            placeExtra(5, 5, TileType::RumBarrel, false);
         }
 
         // Friday: add rum, traps, spinners, cannibal, resurrect fort
@@ -376,20 +378,43 @@ void initializeBoard(GameState& state, const GameConfig& config) {
     }
 
     // Ships — from map definition
-    Coord shipPos[4] = {{-1,-1},{-1,-1},{-1,-1},{-1,-1}};
+    // Determine which team indices participate
+    std::vector<int> activeSlots;
+    if (!config.teamSlots.empty()) {
+        activeSlots = config.teamSlots;
+    } else {
+        for (int t = 0; t < config.numTeams; t++) activeSlots.push_back(t);
+    }
+
+    // Assign ship positions: only active teams get ships
+    for (int t = 0; t < MAX_TEAMS; t++)
+        state.ships[t] = {static_cast<Team>(t), {-1, -1}};
+
+    // Build lookup: team index → ship position from map definition
+    Coord mapShipPos[MAX_TEAMS] = {{-1,-1},{-1,-1},{-1,-1},{-1,-1}};
+    bool hasExplicitTeams = false;
     for (auto& sp : mapDef->ships) {
-        if (sp.team >= 0 && sp.team < 4)
-            shipPos[sp.team] = {sp.row, sp.col};
+        if (sp.team > 0) hasExplicitTeams = true;
+        if (sp.team >= 0 && sp.team < MAX_TEAMS)
+            mapShipPos[sp.team] = {sp.row, sp.col};
     }
-    // Assign ships to teams (use first N from map)
-    int shipIdx = 0;
-    for (int t = 0; t < config.numTeams && shipIdx < static_cast<int>(mapDef->ships.size()); t++) {
-        auto& sp = mapDef->ships[shipIdx++];
-        shipPos[t] = {sp.row, sp.col};
+
+    if (hasExplicitTeams) {
+        // Each active team gets its matching color position
+        for (int slot : activeSlots) {
+            if (slot >= 0 && slot < MAX_TEAMS && mapShipPos[slot].valid())
+                state.ships[slot] = {static_cast<Team>(slot), mapShipPos[slot]};
+        }
+    } else {
+        // Sequential: assign map ship positions to active slots in order
+        for (int i = 0; i < static_cast<int>(activeSlots.size()) && i < static_cast<int>(mapDef->ships.size()); i++) {
+            int teamIdx = activeSlots[i];
+            if (teamIdx >= 0 && teamIdx < MAX_TEAMS)
+                state.ships[teamIdx] = {static_cast<Team>(teamIdx), {mapDef->ships[i].row, mapDef->ships[i].col}};
+        }
     }
-    for (int t = 0; t < config.numTeams; t++) {
-        state.ships[t] = {static_cast<Team>(t), shipPos[t]};
-    }
+    Coord shipPos[4];
+    for (int t = 0; t < MAX_TEAMS; t++) shipPos[t] = state.ships[t].pos;
 
     // Pirate names pool (male / female)
     static const char* maleNames[] = {
@@ -430,13 +455,20 @@ void initializeBoard(GameState& state, const GameConfig& config) {
     std::shuffle(femalePool.begin(), femalePool.end(), nameRng);
     int mi = 0, fi = 0;
 
-    // Pirates
+    // Pirates — only active teams get OnShip, rest are Dead
+    std::set<int> activeSet(activeSlots.begin(), activeSlots.end());
     for (int t = 0; t < config.numTeams; t++) {
+        bool isActive = activeSet.count(t) > 0;
         for (int i = 0; i < PIRATES_PER_TEAM; i++) {
             Pirate& p = state.pirates[t][i];
             p.id = {static_cast<Team>(t), i};
-            p.state = PirateState::OnShip;
-            p.pos = shipPos[t];
+            if (isActive && shipPos[t].valid()) {
+                p.state = PirateState::OnShip;
+                p.pos = shipPos[t];
+            } else {
+                p.state = PirateState::Dead;
+                p.pos = {-1, -1};
+            }
 
             bool female = (t < 4) ? femaleMap[t][i] : false;
             p.isFemale = female;
@@ -445,7 +477,6 @@ void initializeBoard(GameState& state, const GameConfig& config) {
             } else if (mi < static_cast<int>(malePool.size())) {
                 p.name = maleNames[malePool[mi++]];
             }
-            // Portrait: e.g. "white_1_male.png" (1-indexed)
             if (t < 4) {
                 p.portrait = std::string(teamPrefix[t]) + "_" +
                     std::to_string(i + 1) + "_" +
@@ -472,9 +503,11 @@ void initializeBoard(GameState& state, const GameConfig& config) {
     state.characters[4].discovered = false;
     state.characters[4].alive = true;
 
-    // Turn order
-    state.numActivePlayers = config.numTeams;
+    // Turn order — only active teams participate
+    state.numActivePlayers = static_cast<int>(activeSlots.size());
     state.turnOrder = {0, 1, 2, 3};
+    for (int i = 0; i < static_cast<int>(activeSlots.size()) && i < MAX_TEAMS; i++)
+        state.turnOrder[i] = activeSlots[i];
     state.currentPlayerIndex = 0;
     state.phase = TurnPhase::ChooseAction;
     state.turnNumber = 1;

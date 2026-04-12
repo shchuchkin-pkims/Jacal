@@ -79,20 +79,74 @@ Rectangle {
             font.pixelSize: 10; wrapMode: Text.WordWrap; horizontalAlignment: Text.AlignHCenter
         }
 
-        // === Ship controls ===
+        // === Spectator controls (pause / speed) ===
         RowLayout {
             Layout.fillWidth: true; spacing: 4
-            visible: gameController.gameActive && !gameController.isAITurn
+            visible: gameController.spectatorMode
             Button {
-                text: "\u25C0 Корабль"; Layout.fillWidth: true; height: 26
+                text: gameController.aiPaused ? "\u25B6 Продолжить" : "\u23F8 Пауза"
+                Layout.fillWidth: true; height: 26
+                onClicked: gameController.toggleAIPause()
+                background: Rectangle {
+                    color: gameController.aiPaused ?
+                        (parent.hovered ? "#4a8a4a" : "#2a6a2a") :
+                        (parent.hovered ? "#8a6a2a" : "#6a4a1a")
+                    radius: 4
+                }
+                contentItem: Text { text: parent.text
+                    color: gameController.aiPaused ? "#aaffaa" : "#ffddaa"
+                    font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            }
+        }
+
+        // === Ship controls (+ layout: up/left/right/down) ===
+        Item {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 68
+            visible: gameController.gameActive && !gameController.isAITurn
+
+            // Up
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                width: 60; height: 22; text: "\u25B2"
+                onClicked: gameController.moveShipUp()
+                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            }
+            // Left
+            Button {
+                anchors.right: parent.horizontalCenter; anchors.rightMargin: 2
+                anchors.verticalCenter: parent.verticalCenter
+                width: 60; height: 22; text: "\u25C0"
                 onClicked: gameController.moveShipLeft()
                 background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
                 contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             }
+            // Center label
+            Text {
+                anchors.centerIn: parent
+                text: "\u2693"; color: "#667"; font.pixelSize: 14
+            }
+            // Right
             Button {
-                text: "Корабль \u25B6"; Layout.fillWidth: true; height: 26
+                anchors.left: parent.horizontalCenter; anchors.leftMargin: 2
+                anchors.verticalCenter: parent.verticalCenter
+                width: 60; height: 22; text: "\u25B6"
                 onClicked: gameController.moveShipRight()
+                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            }
+            // Down
+            Button {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                width: 60; height: 22; text: "\u25BC"
+                onClicked: gameController.moveShipDown()
                 background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
                 contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
@@ -213,31 +267,29 @@ Rectangle {
                                     }
                                 }
                                 Image {
-                                    Layout.preferredWidth: modelData.isCurrentTeam ? 28 : 16
-                                    Layout.preferredHeight: Layout.preferredWidth
-                                    Layout.maximumHeight: modelData.isCurrentTeam ? 32 : 20
+                                    Layout.preferredWidth: 14; Layout.preferredHeight: 14
                                     source: gameController.assetsPath !== "" ?
                                         (gameController.fileUrl("coin.png")) : ""
                                     visible: modelData.hasCoin
                                     fillMode: Image.PreserveAspectFit; smooth: true
                                 }
-                                // Resurrect button (visible for dead pirates when resurrection is possible)
-                                Button {
-                                    Layout.preferredWidth: 70; Layout.preferredHeight: 20
-                                    visible: modelData.canResurrect === true
-                                    text: "Воскресить"
-                                    font.pixelSize: 9
-                                    onClicked: gameController.resurrectPirate(modelData.unitIndex)
-                                    background: Rectangle {
-                                        color: parent.hovered ? "#3a8a3a" : "#2a5a2a"
-                                        radius: 3; border.color: "#60ff60"
-                                    }
-                                    contentItem: Text {
-                                        text: parent.text; color: "#80ff80"; font: parent.font
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
+                            }
+
+                            // Resurrect button (bright even when pirate is dead)
+                            Button {
+                                anchors.right: parent.right; anchors.rightMargin: 3
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 60; height: 20
+                                visible: modelData.canResurrect === true
+                                opacity: 1.0  // always bright
+                                text: "Воскресить"; font.pixelSize: 8
+                                onClicked: gameController.resurrectPirate(modelData.index)
+                                background: Rectangle {
+                                    color: parent.hovered ? "#4a8a4a" : "#2a6a2a"
+                                    radius: 3; border.color: "#6aba6a"
                                 }
+                                contentItem: Text { text: parent.text; color: "#aaffaa"; font: parent.font
+                                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
 
                             // Click to select this crew member
@@ -290,6 +342,14 @@ Rectangle {
                 visible: gameController.hasSelection && !gameController.isAITurn
                 onClicked: gameController.cancelSelection()
                 background: Rectangle { color: parent.hovered ? "#5a3030" : "#4a2020"; radius: 4 }
+                contentItem: Text { text: parent.text; color: "#faa"; font.pixelSize: 10
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            }
+            Button {
+                text: "Сдаться"; Layout.fillWidth: true; height: 24
+                visible: gameController.gameActive && !gameController.isAITurn && !gameController.spectatorMode
+                onClicked: gameController.surrenderTeam(gameController.currentTeamIndex)
+                background: Rectangle { color: parent.hovered ? "#7a3030" : "#5a2020"; radius: 4 }
                 contentItem: Text { text: parent.text; color: "#faa"; font.pixelSize: 10
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             }

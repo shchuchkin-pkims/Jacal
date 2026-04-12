@@ -1557,9 +1557,23 @@ EventList applyMove(GameState& state, const Move& move) {
         auto& p = state.pirateRef(move.pirateId);
         state.phase = TurnPhase::ChooseAction;
         state.pendingChoices.clear();
+        // Fly pirate to chosen destination
         Coord from = p.pos;
-        // Use resolveChain so ALL tile effects apply (trap, arrow, spinner, etc.)
-        resolveChain(state, p, from, move.to, events);
+        p.pos = move.to;
+        events.push_back({EventType::PirateMoved, from, move.to, p.id});
+        // Reveal destination if closed
+        auto& tile = state.tileAt(move.to);
+        if (!tile.revealed) {
+            tile.revealed = true;
+            events.push_back({EventType::TileRevealed, move.to, {}, {}, {}, tile.type});
+            if (tile.type == TileType::Treasure) {
+                tile.coins = tile.treasureValue;
+                events.push_back({EventType::CoinPlaced, move.to, {}, {}, {}, {}, tile.treasureValue});
+            }
+            if (tile.type == TileType::Galleon) tile.hasGalleonTreasure = true;
+        }
+        // Landing effects (combat, coin pickup)
+        landOnTile(state, p, move.to, from, events);
         if (state.phase == TurnPhase::ChooseAction)
             state.advanceTurn();
         break;
@@ -1602,10 +1616,14 @@ EventList applyMove(GameState& state, const Move& move) {
             // Stay in phase for second pick
         } else {
             // Second pick — swap the two tiles
-            // Per rules: revealed state travels WITH the tile (open stays open, closed stays closed)
+            // Per rules: closed stay closed, open stay open. Directions preserved.
             Tile& a = state.tileAt(state.earthquakeFirst);
             Tile& b = state.tileAt(move.to);
+            bool aRevealed = a.revealed;
+            bool bRevealed = b.revealed;
             std::swap(a, b);
+            a.revealed = aRevealed; // restore original revealed state of position A
+            b.revealed = bRevealed; // restore original revealed state of position B
             events.push_back({EventType::EarthquakeTriggered, state.earthquakeFirst, move.to});
             state.phase = TurnPhase::ChooseAction;
             state.pendingChoices.clear();
@@ -1649,40 +1667,72 @@ EventList applyMove(GameState& state, const Move& move) {
 
         if (actAsPirate) {
             // === BenGunn / converted Missionary: use pirate movement engine ===
-            // Temporarily borrow pirate slot 0 of owner's team (save & restore all state)
+            // Find or create a temp pirate slot (use dead pirate of same team)
+            // We'll use a real pirate slot temporarily
+            int tempSlot = -1;
             int ot = static_cast<int>(ch.owner);
-            auto& tp = state.pirates[ot][0];
-            Pirate origPirate = tp; // save entire pirate state
+            for (int i = 0; i < PIRATES_PER_TEAM; i++) {
+                if (state.pirates[ot][i].state == PirateState::Dead) { tempSlot = i; break; }
+            }
 
-            tp.state = PirateState::OnBoard;
-            tp.pos = from;
-            tp.carryingCoin = ch.carryingCoin;
-            tp.carryingGalleon = ch.carryingGalleon;
-            tp.spinnerProgress = 0;
-            tp.drunkTurnsLeft = 0;
+            if (tempSlot >= 0) {
+                // Borrow a dead pirate slot
+                auto& tp = state.pirates[ot][tempSlot];
+                PirateState origState = tp.state;
+                Coord origPos = tp.pos;
+                bool origCoin = tp.carryingCoin;
+                bool origGalleon = tp.carryingGalleon;
 
-            if (ch.onShip) {
+                tp.state = PirateState::OnBoard;
+                tp.pos = from;
+                tp.carryingCoin = ch.carryingCoin;
+                tp.carryingGalleon = ch.carryingGalleon;
+                tp.spinnerProgress = 0;
+
+                if (ch.onShip) {
+                    tp.state = PirateState::OnBoard;
+                    events.push_back({EventType::CharacterMoved, from, move.to, {}, ch.owner, {}, ci});
+                }
+                ch.onShip = false;
+
+                resolveChain(state, tp, from, move.to, events);
+
+                // Write back character state from temp pirate
+                ch.pos = tp.pos;
+                ch.carryingCoin = tp.carryingCoin;
+                ch.carryingGalleon = tp.carryingGalleon;
+                if (tp.state == PirateState::Dead) {
+                    ch.alive = false;
+                    ch.pos = {-1, -1};
+                }
+                if (tp.state == PirateState::OnShip) {
+                    ch.onShip = true;
+                    ch.pos = tp.pos;
+                }
+                if (tp.state == PirateState::InTrap) {
+                    // Character trapped — keep pos, alive
+                }
+
+                // Restore the pirate slot to Dead
+                tp.state = origState;
+                tp.pos = origPos;
+                tp.carryingCoin = origCoin;
+                tp.carryingGalleon = origGalleon;
+                tp.spinnerProgress = 0;
+            } else {
+                // No dead pirate slot available — fallback to simple move
+                ch.pos = move.to;
+                if (state.mapIsLand(move.to)) {
+                    auto& tile = state.tileAt(move.to);
+                    if (!tile.revealed) {
+                        tile.revealed = true;
+                        events.push_back({EventType::TileRevealed, move.to, {}, {}, {}, tile.type});
+                        if (tile.type == TileType::Treasure) tile.coins = tile.treasureValue;
+                        if (tile.type == TileType::Galleon) tile.hasGalleonTreasure = true;
+                    }
+                }
                 events.push_back({EventType::CharacterMoved, from, move.to, {}, ch.owner, {}, ci});
             }
-            ch.onShip = false;
-
-            resolveChain(state, tp, from, move.to, events);
-
-            // Write back character state from temp pirate
-            ch.pos = tp.pos;
-            ch.carryingCoin = tp.carryingCoin;
-            ch.carryingGalleon = tp.carryingGalleon;
-            if (tp.state == PirateState::Dead) {
-                ch.alive = false;
-                ch.pos = {-1, -1};
-            }
-            if (tp.state == PirateState::OnShip) {
-                ch.onShip = true;
-                ch.pos = tp.pos;
-            }
-
-            // Restore the pirate slot to its original state
-            tp = origPirate;
 
             checkMissionaryFridayMeeting(state, events);
             if (state.phase == TurnPhase::ChooseAction)
@@ -1690,78 +1740,83 @@ EventList applyMove(GameState& state, const Move& move) {
             break;
         }
 
-        // === Friday and normal Missionary: use resolveChain for full tile interactions ===
-        // Use temp pirate slot (same approach as BenGunn)
-        {
-            int ot = static_cast<int>(ch.owner);
-            auto& tp = state.pirates[ot][0];
-            Pirate origPirate = tp;
+        // === Friday and normal Missionary: special movement ===
+        ch.pos = move.to;
 
-            tp.state = PirateState::OnBoard;
-            tp.pos = from;
-            tp.carryingCoin = ch.carryingCoin;
-            tp.carryingGalleon = ch.carryingGalleon;
-            tp.spinnerProgress = 0;
-            tp.drunkTurnsLeft = 0;
-
-            if (ch.onShip) {
-                events.push_back({EventType::CharacterMoved, from, move.to, {}, ch.owner, {}, ci});
-            }
-            ch.onShip = false;
-
-            resolveChain(state, tp, from, move.to, events);
-
-            // Write back character state
-            ch.pos = tp.pos;
-            ch.carryingCoin = tp.carryingCoin;
-            ch.carryingGalleon = tp.carryingGalleon;
-            if (tp.state == PirateState::Dead) {
-                ch.alive = false;
-                ch.pos = {-1, -1};
-            }
-            if (tp.state == PirateState::OnShip) {
-                ch.onShip = true;
-                ch.pos = tp.pos;
-            }
-
-            // Friday-specific post-processing
-            if (ch.type == CharacterType::Friday && ch.alive && ch.pos.valid() && state.mapIsLand(ch.pos)) {
-                auto& tile = state.tileAt(ch.pos);
-                // Friday ignores traps
-                if (tp.state == PirateState::InTrap) {
-                    // Friday doesn't get trapped — free immediately
-                    ch.pos = tp.pos; // stay on tile but not trapped
+        if (state.mapIsLand(move.to)) {
+            auto& tile = state.tileAt(move.to);
+            if (!tile.revealed) {
+                tile.revealed = true;
+                events.push_back({EventType::TileRevealed, move.to, {}, {}, {}, tile.type});
+                if (tile.type == TileType::Treasure) {
+                    tile.coins = tile.treasureValue;
+                    events.push_back({EventType::CoinPlaced, move.to, {}, {}, {}, {}, tile.treasureValue});
                 }
-                // Friday passes spinners instantly
-                if (isSpinner(tile.type) && tp.spinnerProgress > 0) {
-                    tp.spinnerProgress = 0; // will be restored below
-                    events.push_back({EventType::SpinnerAdvanced, ch.pos, {}, {}, ch.owner, {}, spinnerSteps(tile.type)});
+                if (tile.type == TileType::Galleon) tile.hasGalleonTreasure = true;
+                if (tile.type == TileType::Rum) {
+                    state.rumOwned[static_cast<int>(ch.owner)] += tile.rumBottles;
+                    tile.rumBottles = 0;
                 }
-                // Friday dies on Rum
-                if (tile.type == TileType::Rum || tile.type == TileType::RumBarrel) {
-                    ch.alive = false;
-                    ch.pos = {-1, -1};
+            }
+
+            // Friday special: ignores traps, passes spinners instantly
+            if (ch.type == CharacterType::Friday) {
+                if (isSpinner(tile.type)) {
+                    events.push_back({EventType::SpinnerAdvanced, move.to, {}, {}, ch.owner, {}, spinnerSteps(tile.type)});
+                }
+                // Friday meets Rum tile → disappears
+                if ((tile.type == TileType::Rum || tile.type == TileType::RumBarrel)) {
+                    ch.alive = false; ch.pos = {-1, -1};
                     events.push_back({EventType::CharacterDied, move.to, {}, {}, ch.owner, {}, ci});
-                }
-                // Friday ignores cannibal
-                if (tile.type == TileType::Cannibal) {
-                    // Friday survives — undo death if resolveChain killed temp pirate
-                    if (!ch.alive) { ch.alive = true; ch.pos = tp.pos; }
+                    checkMissionaryFridayMeeting(state, events);
+                    state.advanceTurn(); break;
                 }
             }
 
-            // Missionary-specific: check rum conversion
-            if (ch.type == CharacterType::Missionary && !ch.convertedToPirate && ch.alive && ch.pos.valid()) {
-                checkMissionaryRumConversion(state, ch, ci, ch.pos, events);
+            // Missionary special: check rum conversion (Improvement 1)
+            if (ch.type == CharacterType::Missionary && !ch.convertedToPirate) {
+                checkMissionaryRumConversion(state, ch, ci, move.to, events);
             }
 
-            // Restore pirate slot
-            tp = origPirate;
+            // Dangerous tiles for non-Friday
+            if (tile.type == TileType::Cannibal && ch.type != CharacterType::Friday) {
+                ch.alive = false; ch.pos = {-1, -1};
+                events.push_back({EventType::CharacterDied, move.to, {}, {}, ch.owner, {}, ci});
+                state.advanceTurn(); break;
+            }
+            if (tile.type == TileType::Balloon) {
+                Coord shipPos = state.ships[static_cast<int>(ch.owner)].pos;
+                ch.pos = shipPos; ch.onShip = true;
+                if (ch.carryingCoin) {
+                    int si = state.shipIndexAt(shipPos);
+                    if (si >= 0) state.scores[si]++;
+                    ch.carryingCoin = false;
+                }
+                if (ch.carryingGalleon) {
+                    int si = state.shipIndexAt(shipPos);
+                    if (si >= 0) state.scores[si] += 3;
+                    ch.carryingGalleon = false;
+                }
+                events.push_back({EventType::BalloonLiftoff, move.to, shipPos, {}, ch.owner, {}, ci});
+                state.advanceTurn(); break;
+            }
+
+            // Auto-pickup coin (Friday can carry)
+            if (!ch.carryingCoin && !ch.carryingGalleon) {
+                auto& t2 = state.tileAt(move.to);
+                if (t2.hasGalleonTreasure) {
+                    t2.hasGalleonTreasure = false; ch.carryingGalleon = true;
+                    events.push_back({EventType::CoinPickedUp, move.to, {}, {}, ch.owner, {}, 3});
+                } else if (t2.coins > 0) {
+                    t2.coins--; ch.carryingCoin = true;
+                    events.push_back({EventType::CoinPickedUp, move.to, {}, {}, ch.owner, {}, 1});
+                }
+            }
         }
 
+        events.push_back({EventType::CharacterMoved, from, move.to, {}, ch.owner, {}, ci});
         checkMissionaryFridayMeeting(state, events);
-        if (state.phase == TurnPhase::ChooseAction)
-            state.advanceTurn();
+        state.advanceTurn();
         break;
     }
 

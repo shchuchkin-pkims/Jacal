@@ -282,6 +282,10 @@ struct GameConfig {
     // Default -1.0 = use original rules ratio (≈85% filled)
     float tileDensity = -1.0f;
 
+    // Which team color indices participate. Empty = use 0..numTeams-1.
+    // Example: {0, 3} means White and Red play (2 players, but colors White+Red).
+    std::vector<int> teamSlots;
+
     // Sandbox mode: fill board with Empty, place one test tile at center
     bool sandbox = false;
     TileType sandboxTile = TileType::Empty;

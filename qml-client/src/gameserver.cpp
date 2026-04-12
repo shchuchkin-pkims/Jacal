@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <random>
+#include <set>
 
 GameServer::GameServer(QObject* parent) : QObject(parent) {
     m_broadcastTimer.setInterval(2000);
@@ -202,6 +203,27 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
             broadcastRoomState();
         }
     }
+    else if (type == "swap_slot" && !m_inGame) {
+        int targetSlot = msg["slot"].toInt(-1);
+        int mySlot = m_clients[clientId].slot;
+        if (targetSlot < 0 || targetSlot >= 4 || targetSlot == mySlot) return;
+        if (m_slots[targetSlot].state != Protocol::SlotState::Open) return;
+
+        // Free current slot
+        if (mySlot >= 0 && mySlot < 4) {
+            m_slots[mySlot].state = Protocol::SlotState::Open;
+            m_slots[mySlot].playerName = "";
+            m_slots[mySlot].clientId = -1;
+            m_slots[mySlot].ready = false;
+        }
+        // Occupy target slot
+        m_slots[targetSlot].state = Protocol::SlotState::Player;
+        m_slots[targetSlot].playerName = m_clients[clientId].name;
+        m_slots[targetSlot].clientId = clientId;
+        m_slots[targetSlot].ready = false;
+        m_clients[clientId].slot = targetSlot;
+        broadcastRoomState();
+    }
     else if (type == "start_game" && clientId == m_hostClientId && !m_inGame) {
         // Check all slots filled (not Open)
         for (int i = 0; i < 4; i++) {
@@ -212,9 +234,11 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
             }
         }
 
-        // Determine game config
-        // numTeams = highest active slot index + 1
-        // This ensures direct slot→team mapping (slot 0=White, 1=Yellow, etc.)
+        // Apply mapId and density from client message
+        QString mapId = msg["mapId"].toString("classic");
+        float density = static_cast<float>(msg["density"].toDouble(-1.0));
+        m_mapId = mapId.toStdString();
+
         int numTeams = 0;
         for (int i = 0; i < 4; i++) {
             if (m_slots[i].state != Protocol::SlotState::Closed)
@@ -225,6 +249,7 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
         cfg.numTeams = numTeams;
         cfg.teamMode = false;
         cfg.mapId = m_mapId;
+        cfg.tileDensity = density;
         std::random_device rd;
         cfg.seed = rd();
         m_gameSeed = cfg.seed;
@@ -238,6 +263,8 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
         startMsg["seed"] = static_cast<int>(m_gameSeed);
         startMsg["numTeams"] = numTeams;
         startMsg["teamMode"] = false;
+        startMsg["mapId"] = mapId;
+        startMsg["density"] = density;
         sendToAllInRoom(Protocol::makeMsg("game_started", startMsg));
 
         emit logMessage("Game started with " + QString::number(numTeams) + " teams");
@@ -281,22 +308,39 @@ void GameServer::processGameMove(int clientId, const Move& move) {
     // If the move resulted in a choice phase (arrow, horse, cave) and the current
     // team is AI — resolve it immediately BEFORE broadcasting, so clients never
     // see the intermediate phase for AI players.
-    int safety = 20;
+    int safety = 50;
+    std::set<std::pair<int,int>> visited;
     while (m_game && m_game->currentPhase() != TurnPhase::ChooseAction && safety-- > 0) {
         Team phaseTeam = m_game->currentTeam();
         int phaseSlot = slotForTeam(phaseTeam);
         if (phaseSlot >= 0 && isSlotAI(phaseSlot)) {
-            // AI resolves the choice instantly
             auto phaseMoves = m_game->getLegalMoves();
             if (phaseMoves.empty()) break;
             Move pc = AI::chooseBestMove(m_game->state(), phaseMoves);
+            // Cycle detection
+            auto key = std::make_pair(pc.to.row, pc.to.col);
+            if (visited.count(key)) {
+                bool found = false;
+                for (auto& alt : phaseMoves) {
+                    auto altKey = std::make_pair(alt.to.row, alt.to.col);
+                    if (!visited.count(altKey)) { pc = alt; found = true; break; }
+                }
+                if (!found) {
+                    m_game->state().phase = TurnPhase::ChooseAction;
+                    m_game->state().advanceTurn();
+                    break;
+                }
+            }
+            visited.insert(key);
             auto phaseEvents = m_game->makeMove(pc);
-            // Merge events
             events.insert(events.end(), phaseEvents.begin(), phaseEvents.end());
         } else {
-            // Human player needs to choose — stop here, broadcast current state
             break;
         }
+    }
+    if (safety <= 0 && m_game && m_game->currentPhase() != TurnPhase::ChooseAction) {
+        m_game->state().phase = TurnPhase::ChooseAction;
+        m_game->state().advanceTurn();
     }
 
     // Broadcast the move (with all AI chain resolutions included)
@@ -359,13 +403,33 @@ void GameServer::onAITimer() {
     Move chosen = AI::chooseBestMove(m_game->state(), moves);
     processGameMove(-1, chosen);
 
-    // Handle chain phases
-    int safety = 20;
+    // Handle chain phases with cycle detection
+    int safety = 50;
+    std::set<std::pair<int,int>> visited;
     while (m_game && m_game->currentPhase() != TurnPhase::ChooseAction && safety-- > 0) {
         auto phaseMoves = m_game->getLegalMoves();
         if (phaseMoves.empty()) break;
         Move pc = AI::chooseBestMove(m_game->state(), phaseMoves);
+
+        auto key = std::make_pair(pc.to.row, pc.to.col);
+        if (visited.count(key)) {
+            bool found = false;
+            for (auto& alt : phaseMoves) {
+                auto altKey = std::make_pair(alt.to.row, alt.to.col);
+                if (!visited.count(altKey)) { pc = alt; found = true; break; }
+            }
+            if (!found) {
+                m_game->state().phase = TurnPhase::ChooseAction;
+                m_game->state().advanceTurn();
+                break;
+            }
+        }
+        visited.insert(key);
         processGameMove(-1, pc);
+    }
+    if (safety <= 0 && m_game && m_game->currentPhase() != TurnPhase::ChooseAction) {
+        m_game->state().phase = TurnPhase::ChooseAction;
+        m_game->state().advanceTurn();
     }
 }
 

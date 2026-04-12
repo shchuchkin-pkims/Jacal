@@ -41,12 +41,17 @@ struct GameState {
     int lighthouseRemaining = 0;       // how many lighthouse tiles left to pick
     Coord earthquakeFirst = {-1, -1};  // first tile picked for earthquake swap
     int grassRoundsLeft = 0;          // when >0: each player controls next players team
+    int grassTeamShift = 0;           // during grass: currentTeam() offset (+1 means control next team)
 
     GameConfig config;
 
     // ===== Accessors =====
     Team currentTeam() const {
-        return static_cast<Team>(turnOrder[currentPlayerIndex]);
+        int team = turnOrder[currentPlayerIndex];
+        if (grassTeamShift != 0) {
+            team = (team + grassTeamShift) % numActivePlayers;
+        }
+        return static_cast<Team>(team);
     }
     Pirate& pirate(Team t, int i) { return pirates[static_cast<int>(t)][i]; }
     const Pirate& pirate(Team t, int i) const { return pirates[static_cast<int>(t)][i]; }
@@ -180,9 +185,7 @@ struct GameState {
         if (grassRoundsLeft > 0) {
             grassRoundsLeft--;
             if (grassRoundsLeft == 0) {
-                // Restore original turn order
-                for (int i = 0; i < numActivePlayers; i++)
-                    turnOrder[i] = i;
+                grassTeamShift = 0;
             }
         }
 

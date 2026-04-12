@@ -31,6 +31,9 @@ class GameController : public QObject {
     Q_PROPERTY(QVariantList crewStatus READ crewStatus NOTIFY boardChanged)
     Q_PROPERTY(int currentTeamRum READ currentTeamRum NOTIFY boardChanged)
     Q_PROPERTY(bool rumUseMode READ rumUseMode NOTIFY selectionChanged)
+    Q_PROPERTY(bool spectatorMode READ spectatorMode NOTIFY gameChanged)
+    Q_PROPERTY(bool aiPaused READ aiPaused NOTIFY statusChanged)
+    Q_PROPERTY(int currentTeamIndex READ currentTeamIndex NOTIFY turnChanged)
 
 public:
     explicit GameController(QObject* parent = nullptr);
@@ -40,12 +43,21 @@ public:
 
     Q_INVOKABLE void newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId = "classic");
     Q_INVOKABLE void newGameWithDensity(int numPlayers, bool teamMode, bool vsAI, const QString& mapId, float density);
+    Q_INVOKABLE void newGameWithOptions(int numPlayers, bool teamMode, bool vsAI, bool ffa,
+                                        const QString& mapId, float density, int playerTeam);
+    Q_INVOKABLE void newSpectatorGame(int numPlayers, bool teamMode,
+                                       const QString& mapId, float density, int aiDelayMs);
+    Q_INVOKABLE void toggleAIPause();
+    Q_INVOKABLE void setAISpeed(int delayMs);
+    Q_INVOKABLE void surrenderTeam(int teamIndex);
     Q_INVOKABLE void newSandbox(int tileTypeId, int dirBits, int value);
     Q_INVOKABLE QVariantList sandboxTileTypes() const;
     Q_INVOKABLE QVariantList availableMaps() const;
     Q_INVOKABLE void cellClicked(int row, int col);
     Q_INVOKABLE void moveShipLeft();
     Q_INVOKABLE void moveShipRight();
+    Q_INVOKABLE void moveShipUp();
+    Q_INVOKABLE void moveShipDown();
     Q_INVOKABLE void cancelSelection();
     Q_INVOKABLE void activateRumUse();
     Q_INVOKABLE void cancelRumUse();
@@ -69,6 +81,9 @@ public:
     bool hasSelection() const { return m_selectedPirate.valid() || m_rumUseMode; }
     bool isAITurn() const;
     bool rumUseMode() const { return m_rumUseMode; }
+    bool spectatorMode() const { return m_spectatorMode; }
+    bool aiPaused() const { return m_aiPaused; }
+    int currentTeamIndex() const { return m_gameActive ? static_cast<int>(m_game.currentTeam()) : -1; }
     QString assetsPath() const;
     Q_INVOKABLE QString fileUrl(const QString& relativePath) const;
     Q_INVOKABLE QString mapPreviewUrl(const QString& mapId) const;
@@ -103,7 +118,7 @@ private:
     void selectPirate(const PirateId& id);
     void clearSelection();
     void tryExecuteMove(Coord target);
-    void doShipMove(int direction);
+    void doShipMoveAbsolute(int targetDr, int targetDc);
     void scheduleAIIfNeeded();
     void addLog(const QString& msg);
     QString describeMoveResult(const Move& move, const EventList& events);
@@ -125,6 +140,9 @@ private:
     std::array<bool, MAX_TEAMS> m_isAI = {};
     QTimer m_aiTimer;
     float m_pendingDensity = -1.0f;
+    bool m_spectatorMode = false;
+    bool m_aiPaused = false;
+    std::array<bool, MAX_TEAMS> m_surrendered = {};
 
     // Network
     GameServer* m_server = nullptr;

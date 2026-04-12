@@ -8,6 +8,8 @@
 #include <QFile>
 #include <QImage>
 #include <QColor>
+#include <set>
+#include <algorithm>
 
 GameController::GameController(QObject* parent) : QObject(parent) {
     m_aiTimer.setSingleShot(true);
@@ -130,8 +132,164 @@ void GameController::newGameWithDensity(int numPlayers, bool teamMode, bool vsAI
     newGame(numPlayers, teamMode, vsAI, mapId);
 }
 
+void GameController::newGameWithOptions(int numPlayers, bool teamMode, bool vsAI, bool ffa,
+                                        const QString& mapId, float density, int playerTeam) {
+    m_pendingDensity = density;
+    m_aiTimer.stop();
+    m_spectatorMode = false;
+    m_aiPaused = false;
+    m_surrendered = {};
+    m_aiTimer.setInterval(350);
+    if (numPlayers < 2) {
+        m_gameActive = false;
+        clearSelection();
+        emit gameChanged();
+        return;
+    }
+
+    GameConfig cfg;
+    cfg.numTeams = numPlayers;
+    cfg.teamMode = teamMode;
+    cfg.seed = 0;
+    cfg.mapId = mapId.toStdString();
+    cfg.tileDensity = m_pendingDensity;
+    m_pendingDensity = -1.0f;
+
+    // Ensure numTeams covers the player's chosen color
+    if (playerTeam >= cfg.numTeams)
+        cfg.numTeams = playerTeam + 1;
+    const MapDefinition* mapDef = findMap(cfg.mapId);
+    if (mapDef && cfg.numTeams > mapDef->maxPlayers)
+        cfg.numTeams = mapDef->maxPlayers;
+    if (playerTeam < 0 || playerTeam >= cfg.numTeams) playerTeam = 0;
+
+    // Build teamSlots: which team color indices actually play
+    // In vsAI mode, we only need the player's team + (numPlayers-1) AI opponents
+    if (vsAI && numPlayers < cfg.numTeams) {
+        cfg.teamSlots.clear();
+        cfg.teamSlots.push_back(playerTeam);
+        // Fill remaining slots with other teams in order
+        for (int t = 0; t < cfg.numTeams && static_cast<int>(cfg.teamSlots.size()) < numPlayers; t++) {
+            if (t != playerTeam) cfg.teamSlots.push_back(t);
+        }
+        // Sort so turn order is natural (White before Yellow etc)
+        std::sort(cfg.teamSlots.begin(), cfg.teamSlots.end());
+        cfg.numTeams = cfg.numTeams; // keep max for ship positions in map
+    }
+
+    m_isAI = {false, false, false, false};
+    if (vsAI) {
+        for (int t = 0; t < MAX_TEAMS; t++)
+            m_isAI[t] = (t != playerTeam);
+    }
+
+    m_game.newGame(cfg);
+    m_gameActive = true;
+    m_isNetworkGame = false;
+    clearSelection();
+    m_legalMoves = m_game.getLegalMoves();
+    m_moveLog.clear();
+    addLog("=== " + mapId + " ===");
+    updateAll();
+    emit gameChanged();
+
+    scheduleAIIfNeeded();
+}
+
+void GameController::newSpectatorGame(int numPlayers, bool teamMode,
+                                       const QString& mapId, float density, int aiDelayMs) {
+    m_aiTimer.stop();
+    m_spectatorMode = true;
+    m_aiPaused = false;
+    m_aiTimer.setInterval(std::max(100, aiDelayMs));
+
+    GameConfig cfg;
+    cfg.numTeams = numPlayers;
+    cfg.teamMode = teamMode;
+    cfg.seed = 0;
+    cfg.mapId = mapId.toStdString();
+    cfg.tileDensity = density;
+
+    // All teams are AI
+    for (int i = 0; i < MAX_TEAMS; i++) m_isAI[i] = true;
+
+    m_game.newGame(cfg);
+    m_gameActive = true;
+    m_isNetworkGame = false;
+    clearSelection();
+    m_legalMoves = m_game.getLegalMoves();
+    m_moveLog.clear();
+    addLog("=== SPECTATOR: " + mapId + " (" + QString::number(numPlayers) + " AI) ===");
+    addLog("Задержка: " + QString::number(aiDelayMs) + " мс. Пауза: кнопка в HUD.");
+    updateAll();
+    emit gameChanged();
+
+    scheduleAIIfNeeded();
+}
+
+void GameController::toggleAIPause() {
+    m_aiPaused = !m_aiPaused;
+    emit statusChanged();
+    if (!m_aiPaused)
+        scheduleAIIfNeeded();
+}
+
+void GameController::setAISpeed(int delayMs) {
+    m_aiTimer.setInterval(std::max(100, delayMs));
+}
+
+void GameController::surrenderTeam(int teamIndex) {
+    if (!m_gameActive || m_game.isGameOver()) return;
+    if (teamIndex < 0 || teamIndex >= m_game.state().config.numTeams) return;
+    if (m_surrendered[teamIndex]) return; // already surrendered
+
+    m_surrendered[teamIndex] = true;
+
+    // Kill all pirates of this team
+    auto& s = m_game.state();
+    for (int i = 0; i < PIRATES_PER_TEAM; i++) {
+        s.pirates[teamIndex][i].state = PirateState::Dead;
+        s.pirates[teamIndex][i].pos = {-1, -1};
+        s.pirates[teamIndex][i].carryingCoin = false;
+        s.pirates[teamIndex][i].carryingGalleon = false;
+    }
+    // Kill characters owned by this team
+    for (int ci = 0; ci < MAX_CHARACTERS; ci++) {
+        auto& ch = s.characters[ci];
+        if (ch.owner == static_cast<Team>(teamIndex) && ch.discovered && ch.alive) {
+            ch.alive = false;
+            ch.pos = {-1, -1};
+        }
+    }
+
+    addLog(QString("[%1] Сдался!").arg(QString::fromUtf8(teamName(static_cast<Team>(teamIndex)))));
+    emit showMessage(QString("%1 сдались!").arg(QString::fromUtf8(teamName(static_cast<Team>(teamIndex)))));
+
+    // If current team just surrendered, advance turn
+    if (static_cast<int>(m_game.currentTeam()) == teamIndex) {
+        m_game.state().advanceTurn();
+    }
+
+    // Check game over
+    int alive = 0;
+    for (int t = 0; t < s.config.numTeams; t++)
+        if (!m_surrendered[t] && s.isPlayerActive(static_cast<Team>(t))) alive++;
+    if (alive <= 1) {
+        emit gameOver(QString::fromUtf8(teamName(m_game.getWinner())));
+    }
+
+    clearSelection();
+    m_legalMoves = m_game.getLegalMoves();
+    updateAll();
+    scheduleAIIfNeeded();
+}
+
 void GameController::newGame(int numPlayers, bool teamMode, bool vsAI, const QString& mapId) {
     m_aiTimer.stop();
+    m_spectatorMode = false;
+    m_aiPaused = false;
+    m_surrendered = {};
+    m_aiTimer.setInterval(350);
     if (numPlayers < 2) {
         m_gameActive = false;
         clearSelection();
@@ -202,7 +360,10 @@ QVariantList GameController::crewStatus() const {
             m["hasCoin"] = p.carryingCoin || p.carryingGalleon;
             m["isGalleon"] = p.carryingGalleon;
             QString status;
-            QString xy = QString("(%1,%2)").arg(p.pos.col).arg(p.pos.row); // (x,y) format
+            // Chess-style coordinates: X = a-m (col), Y = 1-13 (row, 1 at bottom)
+            QChar xLabel = QChar('a' + p.pos.col);
+            int yLabel = BOARD_SIZE - p.pos.row; // row 0 (top) = 13, row 12 (bottom) = 1
+            QString xy = QString("(%1%2)").arg(xLabel).arg(yLabel);
             switch (p.state) {
                 case PirateState::OnShip: status = "На корабле"; break;
                 case PirateState::OnBoard: {
@@ -280,7 +441,7 @@ QVariantList GameController::crewStatus() const {
         m["col"] = ch.pos.col;
         m["hasCoin"] = ch.carryingCoin || ch.carryingGalleon;
         m["isGalleon"] = ch.carryingGalleon;
-        m["status"] = ch.alive ? QString("(%1,%2)").arg(ch.pos.col).arg(ch.pos.row) : "Погиб";
+        m["status"] = ch.alive ? QString("(%1%2)").arg(QChar('a' + ch.pos.col)).arg(BOARD_SIZE - ch.pos.row) : "Погиб";
         m["state"] = ch.alive ? 1 : 2;
         m["isCharacter"] = true;
         m["selected"] = (m_selectedPirate.team == ch.owner && m_selectedPirate.index == 100 + ci);
@@ -309,6 +470,10 @@ void GameController::quitToMenu() {
     m_aiTimer.stop();
     m_gameActive = false;
     m_isNetworkGame = false;
+    m_spectatorMode = false;
+    m_aiPaused = false;
+    m_surrendered = {};
+    m_aiTimer.setInterval(350);
     m_myNetworkTeam = -1;
     clearSelection();
     m_moveLog.clear();
@@ -387,7 +552,7 @@ QVariantList GameController::availableMaps() const {
             for (auto& m : customs) {
                 QVariantMap entry;
                 entry["id"] = QString::fromStdString(m.id);
-                entry["name"] = QString::fromStdString(m.name) + " *";
+                entry["name"] = QString::fromStdString(m.name);
                 entry["minPlayers"] = m.minPlayers;
                 entry["maxPlayers"] = m.maxPlayers;
                 entry["landCells"] = m.countLandCells();
@@ -469,17 +634,16 @@ QString GameController::mapPreviewUrl(const QString& mapId) const {
 
 bool GameController::isAITurn() const {
     if (!m_gameActive) return false;
+    if (m_spectatorMode) return true; // all teams are AI
     if (m_isNetworkGame) {
-        // In network game, block input only for AI-controlled teams.
-        // Human players (even opponents on the same client) can click —
-        // the server validates and rejects unauthorized moves.
         int curTeam = static_cast<int>(m_game.currentTeam());
         if (curTeam >= 0 && curTeam < MAX_TEAMS && m_netSlotIsAI[curTeam])
             return true;
         return false;
     }
-    int ti = static_cast<int>(m_game.currentTeam());
-    return ti >= 0 && ti < MAX_TEAMS && m_isAI[ti];
+    const auto& s = m_game.state();
+    int seat = s.turnOrder[s.currentPlayerIndex];
+    return seat >= 0 && seat < MAX_TEAMS && m_isAI[seat];
 }
 
 QString GameController::currentTeamName() const {
@@ -500,7 +664,8 @@ QString GameController::statusText() const {
     if (!m_gameActive) return "Начните новую игру";
     if (m_game.isGameOver())
         return QString("Победа: %1").arg(QString::fromUtf8(teamName(m_game.getWinner())));
-    if (isAITurn()) return "ИИ думает...";
+    if (m_spectatorMode && m_aiPaused) return "Пауза (кликните \u25B6 для продолжения)";
+    if (isAITurn()) return m_spectatorMode ? "ИИ играет... (наблюдение)" : "ИИ думает...";
     if (m_rumUseMode) return "Выберите цель для рома (кликните пирата или персонажа)";
 
     // Check if any pirate is on active spinner — hint to user
@@ -617,6 +782,8 @@ QVariantList GameController::shipList() const {
     if (!m_gameActive) return list;
     const auto& s = m_game.state();
     for (int t = 0; t < s.config.numTeams; t++) {
+        // Skip teams with no ship position (not participating)
+        if (!s.ships[t].pos.valid()) continue;
         QVariantMap m;
         m["row"] = s.ships[t].pos.row;
         m["col"] = s.ships[t].pos.col;
@@ -861,26 +1028,33 @@ void GameController::tryExecuteMove(Coord target) {
     scheduleAIIfNeeded();
 }
 
-void GameController::moveShipLeft()  { doShipMove(-1); }
-void GameController::moveShipRight() { doShipMove(+1); }
+void GameController::moveShipLeft()  { doShipMoveAbsolute(0, -1); }
+void GameController::moveShipRight() { doShipMoveAbsolute(0, +1); }
+void GameController::moveShipUp()    { doShipMoveAbsolute(-1, 0); }
+void GameController::moveShipDown()  { doShipMoveAbsolute(+1, 0); }
 
-void GameController::doShipMove(int direction) {
+void GameController::doShipMoveAbsolute(int targetDr, int targetDc) {
     if (!m_gameActive || m_game.isGameOver() || isAITurn()) return;
     if (m_game.state().phase != TurnPhase::ChooseAction) return;
 
+    int si = static_cast<int>(m_game.currentTeam());
+    Coord from = m_game.state().ships[si].pos;
+
+    // Find ship move matching the absolute direction
     for (auto& mv : m_legalMoves) {
         if (mv.type != MoveType::MoveShip) continue;
-        int si = static_cast<int>(m_game.currentTeam());
-        Coord from = m_game.state().ships[si].pos;
         int dr = mv.to.row - from.row;
         int dc = mv.to.col - from.col;
-        int moveDir = 0;
-        if (from.row == 0)       moveDir = dc;
-        else if (from.row == 12) moveDir = -dc;
-        else if (from.col == 0)  moveDir = -dr;
-        else if (from.col == 12) moveDir = dr;
 
-        if ((direction < 0 && moveDir < 0) || (direction > 0 && moveDir > 0)) {
+        // Match: same sign for row and col deltas
+        bool rowMatch = (targetDr == 0 && dr == 0) ||
+                        (targetDr < 0 && dr < 0) ||
+                        (targetDr > 0 && dr > 0);
+        bool colMatch = (targetDc == 0 && dc == 0) ||
+                        (targetDc < 0 && dc < 0) ||
+                        (targetDc > 0 && dc > 0);
+
+        if (rowMatch && colMatch) {
             if (m_isNetworkGame && m_networkClient) {
                 m_networkClient->sendMove(Protocol::moveToJson(mv));
                 return;
@@ -976,16 +1150,43 @@ void GameController::resurrectPirate(int pirateIndex) {
 
 void GameController::scheduleAIIfNeeded() {
     if (!m_gameActive || m_game.isGameOver()) return;
+    if (m_aiPaused) return;
+
+    // Check if current team has surrendered
     int ti = static_cast<int>(m_game.currentTeam());
-    if (ti >= 0 && ti < MAX_TEAMS && m_isAI[ti]) {
+    if (ti >= 0 && ti < MAX_TEAMS && m_surrendered[ti]) {
+        m_game.state().advanceTurn();
+        updateAll();
+        scheduleAIIfNeeded();
+        return;
+    }
+
+    // In spectator mode, all teams are AI
+    if (m_spectatorMode) {
         m_aiTimer.start();
+        return;
+    }
+
+    // Use isAITurn() which checks seat (not shifted team during grass)
+    if (isAITurn()) {
+        m_aiTimer.start();
+        return;
+    }
+
+    // Human player: auto-skip if no legal moves
+    auto moves = m_game.getLegalMoves();
+    if (moves.empty()) {
+        addLog(QString("[%1] Пропуск хода (нет ходов)").arg(QString::fromUtf8(teamName(m_game.currentTeam()))));
+        m_game.state().advanceTurn();
+        updateAll();
+        scheduleAIIfNeeded();
     }
 }
 
 void GameController::processAITurn() {
     if (!m_gameActive || m_game.isGameOver()) return;
-    int ti = static_cast<int>(m_game.currentTeam());
-    if (ti < 0 || ti >= MAX_TEAMS || !m_isAI[ti]) return;
+    // Use isAITurn() which correctly checks seat (not shifted team) during grass effect
+    if (!isAITurn()) return;
 
     auto moves = m_game.getLegalMoves();
     if (moves.empty()) {
@@ -1001,15 +1202,46 @@ void GameController::processAITurn() {
     addLog(describeMoveResult(chosen, events));
 
     // Handle chain phases (arrow choice, horse, cave)
-    int safety = 20;
+    int safety = 50;
+    std::set<std::pair<int,int>> aiVisited; // track visited positions to break loops
     while (m_game.currentPhase() != TurnPhase::ChooseAction &&
            m_game.currentPhase() != TurnPhase::TurnComplete && safety-- > 0) {
         auto phaseMoves = m_game.getLegalMoves();
         if (phaseMoves.empty()) break;
+
+        // Detect cycle: if AI is choosing direction and all targets already visited, pick randomly
         Move pc = AI::chooseBestMove(m_game.state(), phaseMoves);
+
+        // Track positions to detect infinite loops
+        auto key = std::make_pair(pc.to.row, pc.to.col);
+        if (aiVisited.count(key)) {
+            // Already visited this target — try a different one
+            bool found = false;
+            for (auto& alt : phaseMoves) {
+                auto altKey = std::make_pair(alt.to.row, alt.to.col);
+                if (!aiVisited.count(altKey)) {
+                    pc = alt;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                // All targets visited — force end turn to prevent infinite loop
+                m_game.state().phase = TurnPhase::ChooseAction;
+                m_game.state().advanceTurn();
+                break;
+            }
+        }
+        aiVisited.insert(key);
+
         auto pe = m_game.makeMove(pc);
         processEvents(pe);
         addLog(describeMoveResult(pc, pe));
+    }
+    // Safety: if loop exhausted and still in a phase, force advance
+    if (safety <= 0 && m_game.currentPhase() != TurnPhase::ChooseAction) {
+        m_game.state().phase = TurnPhase::ChooseAction;
+        m_game.state().advanceTurn();
     }
 
     clearSelection();
@@ -1059,17 +1291,23 @@ void GameController::addLog(const QString& msg) {
 }
 
 QString GameController::describeMoveResult(const Move& move, const EventList& events) {
+    // Chess-style coord: col -> a-m, row -> 13-1 (row 0 = top = 13)
+    auto coord = [](Coord c) -> QString {
+        if (!c.valid()) return "?";
+        return QString("%1%2").arg(QChar('a' + c.col)).arg(BOARD_SIZE - c.row);
+    };
+
     QString team = QString::fromUtf8(teamName(move.pirateId.team));
     QString desc = QString("[%1] ").arg(team);
 
     switch (move.type) {
     case MoveType::MoveShip:
-        desc += QString("Корабль -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
+        desc += QString("Корабль -> %1").arg(coord(move.to)); break;
     case MoveType::DisembarkPirate:
-        desc += QString("Высадка #%1 -> (%2,%3)").arg(move.pirateId.index).arg(move.to.col).arg(move.to.row); break;
+        desc += QString("Высадка #%1 -> %2").arg(move.pirateId.index).arg(coord(move.to)); break;
     case MoveType::MovePirate:
-        desc += QString("#%1 (%2,%3)->(%4,%5)").arg(move.pirateId.index)
-            .arg(move.from.col).arg(move.from.row).arg(move.to.col).arg(move.to.row); break;
+        desc += QString("#%1 %2->%3").arg(move.pirateId.index)
+            .arg(coord(move.from)).arg(coord(move.to)); break;
     case MoveType::BoardShip:
         desc += QString("#%1 -> корабль").arg(move.pirateId.index); break;
     case MoveType::AdvanceSpinner:
@@ -1077,16 +1315,16 @@ QString GameController::describeMoveResult(const Move& move, const EventList& ev
     case MoveType::PickupCoin:
         desc += QString("#%1 подобрал монету").arg(move.pirateId.index); break;
     case MoveType::ChooseDirection:
-        desc += QString("направление -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
+        desc += QString("направление -> %1").arg(coord(move.to)); break;
     case MoveType::ChooseHorseDest:
-        desc += QString("конь -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
+        desc += QString("конь -> %1").arg(coord(move.to)); break;
     case MoveType::MoveCharacter:
-        desc += QString("персонаж -> (%1,%2)").arg(move.to.col).arg(move.to.row); break;
+        desc += QString("персонаж -> %1").arg(coord(move.to)); break;
     case MoveType::ResurrectPirate:
         desc += QString("воскрешение #%1").arg(move.pirateId.index); break;
     case MoveType::UseRum:
         if (move.characterIndex >= 0)
-            desc += QString("ром -> персонаж (%1,%2)").arg(move.to.col).arg(move.to.row);
+            desc += QString("ром -> персонаж %1").arg(coord(move.to));
         else
             desc += QString("ром -> освободить #%1").arg(move.pirateId.index);
         break;

@@ -41,10 +41,24 @@ ApplicationWindow {
         // "main" = top menu, "single" = single player submenu, "sandbox" = sandbox
         property string menuState: "main"
 
+        Flickable {
+            id: menuFlick
+            anchors.fill: parent
+            contentWidth: width
+            contentHeight: menuColumn.height + 20
+            flickableDirection: Flickable.VerticalFlick
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
         Column {
-            anchors.centerIn: parent
+            id: menuColumn
             spacing: 12
             width: 400
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: menuColumn.height + 20 < menuFlick.height
+               ? (menuFlick.height - menuColumn.height) / 2
+               : 10
 
             Text {
                 text: "JACAL"
@@ -194,7 +208,28 @@ ApplicationWindow {
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
 
-                // Game mode buttons (filtered by map maxPlayers, Bug 6)
+                // Team color selector
+                RowLayout {
+                    width: parent.width; spacing: 8
+                    Text { text: "Ваш цвет:"; color: "#ccc"; font.pixelSize: 14
+                        Layout.alignment: Qt.AlignVCenter }
+                    ComboBox {
+                        id: teamColorSelector
+                        Layout.fillWidth: true; height: 36
+                        model: {
+                            var colors = ["Белые", "Жёлтые", "Чёрные", "Красные"]
+                            return colors.slice(0, singlePlayerMenu.mapMaxPlayers)
+                        }
+                        currentIndex: 0
+                        background: Rectangle { color: "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                        contentItem: Text {
+                            text: teamColorSelector.displayText; color: "white"; font.pixelSize: 14
+                            leftPadding: 8; verticalAlignment: Text.AlignVCenter
+                        }
+                    }
+                }
+
+                // Game mode buttons (filtered by map maxPlayers)
                 property int mapMaxPlayers: {
                     var maps = gameController.availableMaps();
                     for (var i = 0; i < maps.length; i++)
@@ -202,30 +237,93 @@ ApplicationWindow {
                     return 4;
                 }
 
+                // Helper function for game mode buttons
+                function startMode(players, team, ai, ffa) {
+                    var pt = teamColorSelector.currentIndex
+                    gameController.newGameWithOptions(players, team, ai, ffa,
+                        mapSelector.selectedMapId, densitySlider.value, pt)
+                }
+                function startSpec(players, team) {
+                    gameController.newSpectatorGame(players, team,
+                        mapSelector.selectedMapId, densitySlider.value,
+                        Math.round(aiSpeedSlider.value))
+                }
+
+                // ── Против ИИ ──
+                Text { text: "Против ИИ"; color: "#8ab"; font.pixelSize: 11; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter }
+                Rectangle { width: parent.width; height: 1; color: "#2a4a6a" }
                 Repeater {
                     model: [
-                        {text: "1 vs ИИ (дуэль)",          players: 2, team: false, ai: true},
-                        {text: "2 игрока (дуэль)",          players: 2, team: false, ai: false},
-                        {text: "1 vs ИИ (команды 2x2)",     players: 4, team: true,  ai: true},
-                        {text: "2 игрока (команды 2x2)",     players: 4, team: true,  ai: false},
-                        {text: "3 игрока",                   players: 3, team: false, ai: false},
-                        {text: "4 игрока",                   players: 4, team: false, ai: false}
+                        {text: "1 vs ИИ",               p: 2, team: false, ffa: false},
+                        {text: "1 vs 3 ИИ (FFA)",       p: 4, team: false, ffa: true},
+                        {text: "1 vs ИИ (команды 2x2)", p: 4, team: true,  ffa: false}
                     ]
                     Button {
-                        width: parent.width; height: 36
-                        text: modelData.text; font.pixelSize: 13
-                        visible: modelData.players <= singlePlayerMenu.mapMaxPlayers
-                        enabled: modelData.players <= singlePlayerMenu.mapMaxPlayers
-                        onClicked: gameController.newGameWithDensity(
-                            modelData.players, modelData.team, modelData.ai,
-                            mapSelector.selectedMapId, densitySlider.value)
-                        background: Rectangle {
-                            color: parent.enabled ? (parent.hovered ? "#3a6a9a" : "#2a4a6a") : "#1a2a3a"
-                            radius: 5; border.color: parent.enabled ? "#5a8aba" : "#3a4a5a"
-                        }
-                        contentItem: Text { text: parent.text
-                            color: parent.enabled ? "white" : "#555"
-                            font: parent.font
+                        width: parent.width; height: 34; text: modelData.text; font.pixelSize: 13
+                        visible: modelData.p <= singlePlayerMenu.mapMaxPlayers
+                        onClicked: singlePlayerMenu.startMode(modelData.p, modelData.team, true, modelData.ffa)
+                        background: Rectangle { color: parent.hovered ? "#3a6a9a" : "#2a4a6a"; radius: 5; border.color: "#5a8aba" }
+                        contentItem: Text { text: parent.text; color: "white"; font: parent.font
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
+
+                // ── Мультиплеер (1 ПК) ──
+                Item { width: 1; height: 4 }
+                Text { text: "Мультиплеер (1 ПК)"; color: "#8ab"; font.pixelSize: 11; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter }
+                Rectangle { width: parent.width; height: 1; color: "#2a4a6a" }
+                Repeater {
+                    model: [
+                        {text: "2 игрока",           p: 2, team: false},
+                        {text: "2x2 (команды)",      p: 4, team: true},
+                        {text: "3 игрока",           p: 3, team: false},
+                        {text: "4 игрока (FFA)",     p: 4, team: false}
+                    ]
+                    Button {
+                        width: parent.width; height: 34; text: modelData.text; font.pixelSize: 13
+                        visible: modelData.p <= singlePlayerMenu.mapMaxPlayers
+                        onClicked: singlePlayerMenu.startMode(modelData.p, modelData.team, false, false)
+                        background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#1e3a5a"; radius: 5; border.color: "#4a7a9a" }
+                        contentItem: Text { text: parent.text; color: "#bbddff"; font: parent.font
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
+                }
+
+                // ── Наблюдение ──
+                Item { width: 1; height: 4 }
+                Text { text: "Наблюдение (только ИИ)"; color: "#8ab"; font.pixelSize: 11; font.bold: true
+                    anchors.horizontalCenter: parent.horizontalCenter }
+                Rectangle { width: parent.width; height: 1; color: "#2a4a6a" }
+                RowLayout {
+                    width: parent.width; spacing: 6
+                    Text { text: "Скорость:"; color: "#aaa"; font.pixelSize: 11
+                        Layout.alignment: Qt.AlignVCenter }
+                    Slider {
+                        id: aiSpeedSlider
+                        Layout.fillWidth: true; height: 24
+                        from: 100; to: 3000; value: 1000; stepSize: 100
+                    }
+                    Text { text: (aiSpeedSlider.value / 1000).toFixed(1) + "с"
+                        color: "#ffd700"; font.pixelSize: 11; font.bold: true
+                        Layout.alignment: Qt.AlignVCenter; Layout.preferredWidth: 30 }
+                }
+                RowLayout {
+                    width: parent.width; spacing: 4
+                    Button {
+                        Layout.fillWidth: true; height: 34; text: "\uD83D\uDC41 ИИ vs ИИ"; font.pixelSize: 13
+                        onClicked: singlePlayerMenu.startSpec(2, false)
+                        background: Rectangle { color: parent.hovered ? "#5a4a2a" : "#3a3a1a"; radius: 5; border.color: "#8a7a3a" }
+                        contentItem: Text { text: parent.text; color: "#ffdd88"; font: parent.font
+                            horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                    }
+                    Button {
+                        Layout.fillWidth: true; height: 34; text: "\uD83D\uDC41 4 ИИ (FFA)"; font.pixelSize: 13
+                        visible: 4 <= singlePlayerMenu.mapMaxPlayers
+                        onClicked: singlePlayerMenu.startSpec(4, false)
+                        background: Rectangle { color: parent.hovered ? "#5a4a2a" : "#3a3a1a"; radius: 5; border.color: "#8a7a3a" }
+                        contentItem: Text { text: parent.text; color: "#ffdd88"; font: parent.font
                             horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                     }
                 }
@@ -297,7 +395,8 @@ ApplicationWindow {
                         horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 }
             }
-        }
+        } // Column menuColumn
+        } // Flickable
     }
 
     // ===== NETWORK SCREEN =====

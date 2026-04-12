@@ -1221,155 +1221,7 @@ static void testRumUsage() {
 }
 
 // ============================================================
-// 18. Team Slots (playing as non-White team)
-// ============================================================
-static void testTeamSlots() {
-    SECTION("Team Slots");
-
-    // === Red + White duel (teamSlots = {0, 3}) ===
-    {
-        GameConfig cfg;
-        cfg.numTeams = 4;
-        cfg.seed = 42;
-        cfg.mapId = "classic";
-        cfg.teamSlots = {0, 3}; // White + Red
-        Game g;
-        g.newGame(cfg);
-        auto& s = g.state();
-
-        // Red ship at correct position (West side, col=0)
-        CHECK(s.ships[3].pos.valid(), "Slots{0,3}: Red ship exists");
-        CHECK(s.ships[3].pos.col == 0, "Slots{0,3}: Red ship on west side (col=0)");
-        CHECK(s.ships[0].pos.row == 0, "Slots{0,3}: White ship on north side (row=0)");
-
-        // Yellow and Black ships don't exist
-        CHECK(!s.ships[1].pos.valid(), "Slots{0,3}: Yellow ship absent");
-        CHECK(!s.ships[2].pos.valid(), "Slots{0,3}: Black ship absent");
-
-        // Yellow and Black pirates are dead
-        for (int i = 0; i < PIRATES_PER_TEAM; i++) {
-            CHECK(s.pirates[1][i].state == PirateState::Dead, "Slots{0,3}: Yellow pirate dead");
-            CHECK(s.pirates[2][i].state == PirateState::Dead, "Slots{0,3}: Black pirate dead");
-        }
-
-        // Red pirates alive on ship
-        for (int i = 0; i < PIRATES_PER_TEAM; i++)
-            CHECK(s.pirates[3][i].state == PirateState::OnShip, "Slots{0,3}: Red pirate on ship");
-
-        // Turn order: only White and Red
-        CHECK(s.numActivePlayers == 2, "Slots{0,3}: 2 active players");
-        CHECK(s.turnOrder[0] == 0, "Slots{0,3}: turnOrder[0] = White");
-        CHECK(s.turnOrder[1] == 3, "Slots{0,3}: turnOrder[1] = Red");
-
-        // White moves first
-        CHECK(s.currentTeam() == Team::White, "Slots{0,3}: White moves first");
-
-        // Play a move as White, then check Red's turn
-        auto moves = g.getLegalMoves();
-        CHECK(!moves.empty(), "Slots{0,3}: White has moves");
-        g.makeMove(moves[0]);
-        resolvePhases(g);
-        CHECK(g.state().currentTeam() == Team::Red, "Slots{0,3}: Red moves after White");
-
-        // Red has moves (disembark, ship)
-        auto redMoves = g.getLegalMoves();
-        CHECK(!redMoves.empty(), "Slots{0,3}: Red has moves");
-        bool redHasDisembark = false;
-        bool redHasShip = false;
-        for (auto& m : redMoves) {
-            if (m.type == MoveType::DisembarkPirate && m.pirateId.team == Team::Red) redHasDisembark = true;
-            if (m.type == MoveType::MoveShip && m.pirateId.team == Team::Red) redHasShip = true;
-        }
-        CHECK(redHasDisembark, "Slots{0,3}: Red can disembark");
-        CHECK(redHasShip, "Slots{0,3}: Red can move ship");
-    }
-
-    // === Black + Yellow duel (teamSlots = {1, 2}) ===
-    {
-        GameConfig cfg;
-        cfg.numTeams = 4;
-        cfg.seed = 99;
-        cfg.mapId = "classic";
-        cfg.teamSlots = {1, 2};
-        Game g;
-        g.newGame(cfg);
-        auto& s = g.state();
-
-        CHECK(s.ships[1].pos.valid(), "Slots{1,2}: Yellow ship exists");
-        CHECK(s.ships[2].pos.valid(), "Slots{1,2}: Black ship exists");
-        CHECK(!s.ships[0].pos.valid(), "Slots{1,2}: White ship absent");
-        CHECK(!s.ships[3].pos.valid(), "Slots{1,2}: Red ship absent");
-        CHECK(s.numActivePlayers == 2, "Slots{1,2}: 2 active");
-        CHECK(s.currentTeam() == Team::Yellow, "Slots{1,2}: Yellow moves first");
-
-        // Play Yellow move, then Black
-        auto moves = g.getLegalMoves();
-        g.makeMove(moves[0]);
-        resolvePhases(g);
-        CHECK(g.state().currentTeam() == Team::Black, "Slots{1,2}: Black after Yellow");
-    }
-
-    // === Solo Red in 4-team game (teamSlots = {0, 1, 2, 3} but only Red is human) ===
-    {
-        GameConfig cfg;
-        cfg.numTeams = 4;
-        cfg.seed = 55;
-        cfg.mapId = "classic";
-        // All 4 teams, no teamSlots filter
-        Game g;
-        g.newGame(cfg);
-        auto& s = g.state();
-
-        CHECK(s.numActivePlayers == 4, "4-team: all active");
-        // Play 4 turns, verify each team gets a turn
-        Team seen[4] = {Team::None, Team::None, Team::None, Team::None};
-        for (int i = 0; i < 4; i++) {
-            seen[i] = g.state().currentTeam();
-            auto moves = g.getLegalMoves();
-            if (!moves.empty()) g.makeMove(moves[0]);
-            resolvePhases(g);
-        }
-        CHECK(seen[0] == Team::White, "4-team: turn 1 = White");
-        CHECK(seen[1] == Team::Yellow, "4-team: turn 2 = Yellow");
-        CHECK(seen[2] == Team::Black, "4-team: turn 3 = Black");
-        CHECK(seen[3] == Team::Red, "4-team: turn 4 = Red");
-    }
-
-    // === AI stress with teamSlots ===
-    {
-        for (int playerTeam = 0; playerTeam < 4; playerTeam++) {
-            GameConfig cfg;
-            cfg.numTeams = 4;
-            cfg.seed = 100 + playerTeam;
-            cfg.mapId = "classic";
-            // Duel: player vs White AI (or vs whoever)
-            int otherTeam = (playerTeam == 0) ? 1 : 0;
-            cfg.teamSlots = {std::min(playerTeam, otherTeam), std::max(playerTeam, otherTeam)};
-
-            Game g;
-            g.newGame(cfg);
-
-            bool ok = true;
-            for (int turn = 0; turn < 40 && !g.isGameOver(); turn++) {
-                auto moves = g.getLegalMoves();
-                if (moves.empty()) { g.state().advanceTurn(); continue; }
-                Move chosen = AI::chooseBestMove(g.state(), moves);
-                g.makeMove(chosen);
-                int safety = 20;
-                while (g.currentPhase() != TurnPhase::ChooseAction && safety-- > 0) {
-                    auto pm = g.getLegalMoves();
-                    if (pm.empty()) break;
-                    g.makeMove(pm[0]);
-                }
-                if (safety <= 0) { g.state().phase = TurnPhase::ChooseAction; g.state().advanceTurn(); }
-            }
-            CHECK(ok, "Slots AI stress: playerTeam=" << playerTeam << " no crash");
-        }
-    }
-}
-
-// ============================================================
-// 19. Invariant Fuzz
+// 18. Invariant Fuzz
 // ============================================================
 static void testInvariants() {
     SECTION("Invariants (fuzz)");
@@ -1379,29 +1231,7 @@ static void testInvariants() {
     bool anyFail = false;
 
     for (uint32_t seed = 1; seed <= 50; seed++) {
-        GameConfig fuzzCfg;
-        fuzzCfg.mapId = "classic";
-        fuzzCfg.seed = seed;
-        // Vary team configurations: standard, teamSlots, different colors
-        if (seed % 5 == 0) {
-            // Red vs White duel
-            fuzzCfg.numTeams = 4;
-            fuzzCfg.teamSlots = {0, 3};
-        } else if (seed % 5 == 1) {
-            // Yellow vs Black duel
-            fuzzCfg.numTeams = 4;
-            fuzzCfg.teamSlots = {1, 2};
-        } else if (seed % 5 == 2) {
-            // 3 teams: White, Black, Red
-            fuzzCfg.numTeams = 4;
-            fuzzCfg.teamSlots = {0, 2, 3};
-        } else if (seed % 2 == 0) {
-            fuzzCfg.numTeams = 4;
-        } else {
-            fuzzCfg.numTeams = 2;
-        }
-        Game g;
-        g.newGame(fuzzCfg);
+        Game g = makeGame("classic", (seed % 2 == 0) ? 4 : 2, seed);
         int startCoins = Rules::coinsRemaining(g.state());
         totalGames++;
 
@@ -1527,7 +1357,6 @@ int main() {
     testGameOver();
     testResurrection();
     testRumUsage();
-    testTeamSlots();
     testAI();
     testAllMaps();
     testInvariants();

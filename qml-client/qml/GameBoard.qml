@@ -15,13 +15,13 @@ Item {
         radius: 4
     }
 
-    // Y-axis labels (left side, bottom-up: 0 at bottom, 12 at top)
+    // Y-axis labels (left side, chess-style: 1 at bottom, 13 at top)
     Repeater {
         model: 13
         Text {
             x: tileGrid.x - labelSize - 2
-            y: tileGrid.y + (12 - index) * cellSize + cellSize / 2 - height / 2
-            text: index.toString()
+            y: tileGrid.y + index * cellSize + cellSize / 2 - height / 2
+            text: (13 - index).toString()
             color: "#667788"
             font.pixelSize: Math.min(labelSize - 2, cellSize * 0.35)
             font.bold: true
@@ -30,13 +30,13 @@ Item {
         }
     }
 
-    // X-axis labels (bottom, left-to-right: 0 at left, 12 at right)
+    // X-axis labels (bottom, chess-style: a at left, m at right)
     Repeater {
         model: 13
         Text {
             x: tileGrid.x + index * cellSize + cellSize / 2 - width / 2
             y: tileGrid.y + 13 * cellSize + 2
-            text: index.toString()
+            text: String.fromCharCode(97 + index)  // 'a' + index
             color: "#667788"
             font.pixelSize: Math.min(labelSize - 2, cellSize * 0.35)
             font.bold: true
