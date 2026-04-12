@@ -324,16 +324,20 @@ static void addSwimmingMoves(const GameState& s, const Pirate& p, MoveList& move
 // ============================================================
 
 static void addDisembarkMoves(const GameState& s, const Pirate& p, MoveList& moves) {
-    Coord front = s.shipFront(p.id.team);
-    if (!front.valid() || !s.mapIsLand(front)) return;
-
-    // Pirates on ship never carry gold (it's auto-loaded)
-    Move m;
-    m.type = MoveType::DisembarkPirate;
-    m.pirateId = p.id;
-    m.from = s.ships[static_cast<int>(p.id.team)].pos;
-    m.to = front;
-    moves.push_back(m);
+    Coord sp = s.ships[static_cast<int>(p.id.team)].pos;
+    // Can disembark to any cardinal-adjacent land tile (no diagonals)
+    const int dirs[] = {DIR_N, DIR_S, DIR_E, DIR_W};
+    for (int d : dirs) {
+        Coord adj = sp.moved(static_cast<Direction>(d));
+        if (adj.inBounds() && s.mapIsLand(adj)) {
+            Move m;
+            m.type = MoveType::DisembarkPirate;
+            m.pirateId = p.id;
+            m.from = sp;
+            m.to = adj;
+            moves.push_back(m);
+        }
+    }
 }
 
 // ============================================================
@@ -445,22 +449,50 @@ MoveList getLegalMoves(const GameState& state) {
         auto& ch = state.characters[ci];
         if (ch.owner != team || !ch.discovered || !ch.alive) continue;
 
-        // Character on ship → can disembark (like pirate)
+        // Character on ship → can disembark to any cardinal-adjacent land tile
         if (ch.onShip) {
-            Coord front = state.shipFront(team);
-            if (front.valid() && state.mapIsLand(front)) {
-                Move m;
-                m.type = MoveType::MoveCharacter;
-                m.pirateId = {team, 100 + ci};
-                m.characterIndex = ci;
-                m.from = state.ships[static_cast<int>(team)].pos;
-                m.to = front;
-                moves.push_back(m);
+            Coord sp = state.ships[static_cast<int>(team)].pos;
+            const int cdirs[] = {DIR_N, DIR_S, DIR_E, DIR_W};
+            for (int d : cdirs) {
+                Coord adj = sp.moved(static_cast<Direction>(d));
+                if (adj.inBounds() && state.mapIsLand(adj)) {
+                    Move m;
+                    m.type = MoveType::MoveCharacter;
+                    m.pirateId = {team, 100 + ci};
+                    m.characterIndex = ci;
+                    m.from = sp;
+                    m.to = adj;
+                    moves.push_back(m);
+                }
             }
             continue;
         }
 
         if (!ch.pos.valid() || !state.mapIsLand(ch.pos)) continue;
+
+        // Drunk character: can only skip turn
+        if (ch.drunkTurnsLeft > 0) {
+            Move m; m.type = MoveType::SkipDrunk;
+            m.pirateId = {team, 100 + ci};
+            m.characterIndex = ci;
+            m.from = ch.pos; m.to = ch.pos;
+            moves.push_back(m);
+            continue;
+        }
+
+        // Character on active spinner: can only advance
+        if (ch.spinnerProgress > 0) {
+            const Tile& stile = state.tileAt(ch.pos);
+            if (isSpinner(stile.type) && ch.spinnerProgress < spinnerSteps(stile.type)) {
+                Move m; m.type = MoveType::AdvanceSpinner;
+                m.pirateId = {team, 100 + ci};
+                m.characterIndex = ci;
+                m.from = ch.pos; m.to = ch.pos;
+                moves.push_back(m);
+                continue;
+            }
+        }
+
         bool carrying = ch.carryingCoin || ch.carryingGalleon;
 
         for (int d = 0; d < 8; d++) {
@@ -1476,6 +1508,17 @@ EventList applyMove(GameState& state, const Move& move) {
     }
 
     case MoveType::AdvanceSpinner: {
+        // Handle character spinner advance
+        if (move.characterIndex >= 0 && move.characterIndex < MAX_CHARACTERS) {
+            auto& ch = state.characters[move.characterIndex];
+            ch.spinnerProgress++;
+            int required = spinnerSteps(state.tileAt(ch.pos).type);
+            events.push_back({EventType::SpinnerAdvanced, ch.pos, {}, move.pirateId, {},
+                              {}, ch.spinnerProgress});
+            state.advanceTurn();
+            break;
+        }
+
         auto& p = state.pirateRef(move.pirateId);
         p.spinnerProgress++;
         int required = spinnerSteps(state.tileAt(p.pos).type);
@@ -1658,7 +1701,7 @@ EventList applyMove(GameState& state, const Move& move) {
             tp.pos = from;
             tp.carryingCoin = ch.carryingCoin;
             tp.carryingGalleon = ch.carryingGalleon;
-            tp.spinnerProgress = 0;
+            tp.spinnerProgress = 0; // leaving current tile (like MovePirate reset)
             tp.drunkTurnsLeft = 0;
 
             if (ch.onShip) {
@@ -1672,6 +1715,8 @@ EventList applyMove(GameState& state, const Move& move) {
             ch.pos = tp.pos;
             ch.carryingCoin = tp.carryingCoin;
             ch.carryingGalleon = tp.carryingGalleon;
+            ch.spinnerProgress = tp.spinnerProgress;
+            ch.drunkTurnsLeft = tp.drunkTurnsLeft;
             if (tp.state == PirateState::Dead) {
                 ch.alive = false;
                 ch.pos = {-1, -1};
@@ -1701,7 +1746,7 @@ EventList applyMove(GameState& state, const Move& move) {
             tp.pos = from;
             tp.carryingCoin = ch.carryingCoin;
             tp.carryingGalleon = ch.carryingGalleon;
-            tp.spinnerProgress = 0;
+            tp.spinnerProgress = 0; // leaving current tile
             tp.drunkTurnsLeft = 0;
 
             if (ch.onShip) {
@@ -1715,6 +1760,8 @@ EventList applyMove(GameState& state, const Move& move) {
             ch.pos = tp.pos;
             ch.carryingCoin = tp.carryingCoin;
             ch.carryingGalleon = tp.carryingGalleon;
+            ch.spinnerProgress = tp.spinnerProgress;
+            ch.drunkTurnsLeft = tp.drunkTurnsLeft;
             if (tp.state == PirateState::Dead) {
                 ch.alive = false;
                 ch.pos = {-1, -1};
@@ -1830,6 +1877,7 @@ EventList applyMove(GameState& state, const Move& move) {
     }
 
     case MoveType::SkipDrunk: {
+        // Works for both pirates and characters — just advance turn
         state.advanceTurn();
         break;
     }

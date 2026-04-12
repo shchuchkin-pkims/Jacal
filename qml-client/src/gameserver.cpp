@@ -60,19 +60,25 @@ void GameServer::stop() {
 
 void GameServer::onBroadcastTimer() {
     if (!m_broadcastSocket || !m_server) return;
-    // Count players
-    int players = 0;
-    for (int i = 0; i < 4; i++)
-        if (m_slots[i].state == Protocol::SlotState::Player) players++;
+    // Count occupied slots (players + AI) and available slots (non-closed)
+    int occupied = 0, available = 0;
+    for (int i = 0; i < 4; i++) {
+        if (m_slots[i].state != Protocol::SlotState::Closed) available++;
+        if (m_slots[i].state == Protocol::SlotState::Player ||
+            m_slots[i].state == Protocol::SlotState::AI) occupied++;
+    }
 
     QJsonObject info;
     info["magic"] = Protocol::BROADCAST_MAGIC;
     info["name"] = m_roomName;
     info["port"] = m_port;
-    info["players"] = players;
-    info["maxPlayers"] = 4;
+    info["players"] = occupied;
+    info["maxPlayers"] = available;
     info["inGame"] = m_inGame;
     info["version"] = Protocol::APP_VERSION;
+    info["mapId"] = QString::fromStdString(m_mapId);
+    const MapDefinition* md = findMap(m_mapId);
+    info["mapName"] = md ? QString::fromStdString(md->name) : QString::fromStdString(m_mapId);
 
     QByteArray data = QJsonDocument(info).toJson(QJsonDocument::Compact);
     m_broadcastSocket->writeDatagram(data, QHostAddress::Broadcast, Protocol::BROADCAST_PORT);
@@ -115,6 +121,7 @@ void GameServer::onNewConnection() {
         welcome["chat"] = chatToJson();
         welcome["roomName"] = m_roomName;
         welcome["inGame"] = m_inGame;
+        welcome["mapId"] = QString::fromStdString(m_mapId);
         sendTo(id, Protocol::makeMsg("welcome", welcome));
 
         broadcastRoomState();
@@ -175,6 +182,11 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
         if (slot >= 0) m_slots[slot].playerName = name;
         broadcastRoomState();
     }
+    else if (type == "set_map" && clientId == m_hostClientId && !m_inGame) {
+        QString mapId = msg["mapId"].toString("classic");
+        m_mapId = mapId.toStdString();
+        broadcastRoomState();
+    }
     else if (type == "chat") {
         QString text = msg["text"].toString().left(200);
         QString from = m_clients.contains(clientId) ? m_clients[clientId].name : "?";
@@ -189,12 +201,25 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
     else if (type == "set_slot" && clientId == m_hostClientId && !m_inGame) {
         int slot = msg["slot"].toInt();
         QString state = msg["state"].toString();
-        if (slot >= 0 && slot < 4 && m_slots[slot].state != Protocol::SlotState::Player) {
-            m_slots[slot].state = Protocol::slotStateFromStr(state);
-            m_slots[slot].playerName = (m_slots[slot].state == Protocol::SlotState::AI) ? "ИИ" : "";
-            m_slots[slot].clientId = -1;
-            broadcastRoomState();
+        if (slot < 0 || slot >= 4) return;
+        // Don't allow changing host's own slot
+        if (m_slots[slot].clientId == m_hostClientId) return;
+
+        // If slot has a player, kick them first
+        if (m_slots[slot].state == Protocol::SlotState::Player && m_slots[slot].clientId >= 0) {
+            int kickedId = m_slots[slot].clientId;
+            if (m_clients.contains(kickedId)) {
+                m_clients[kickedId].slot = -1; // prevent onClientDisconnected from resetting slot
+                if (m_clients[kickedId].socket)
+                    m_clients[kickedId].socket->disconnectFromHost();
+            }
         }
+
+        m_slots[slot].state = Protocol::slotStateFromStr(state);
+        m_slots[slot].playerName = (m_slots[slot].state == Protocol::SlotState::AI) ? "ИИ" : "";
+        m_slots[slot].clientId = -1;
+        m_slots[slot].ready = false;
+        broadcastRoomState();
     }
     else if (type == "ready" && !m_inGame) {
         int slot = m_clients[clientId].slot;
@@ -233,6 +258,18 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
                 return;
             }
         }
+
+        // Check all non-host players are ready
+        for (int i = 0; i < 4; i++) {
+            if (m_slots[i].state == Protocol::SlotState::Player &&
+                m_slots[i].clientId != m_hostClientId &&
+                !m_slots[i].ready) {
+                sendTo(clientId, Protocol::makeMsg("error",
+                    {{"msg", "Не все игроки готовы"}}));
+                return;
+            }
+        }
+
 
         // Apply mapId and density from client message
         QString mapId = msg["mapId"].toString("classic");
@@ -305,9 +342,12 @@ void GameServer::handleMessage(int clientId, const QJsonObject& msg) {
 void GameServer::processGameMove(int clientId, const Move& move) {
     auto events = m_game->makeMove(move);
 
+    // Broadcast this move to all clients
+    broadcastSingleMove(move, events);
+
     // If the move resulted in a choice phase (arrow, horse, cave) and the current
-    // team is AI — resolve it immediately BEFORE broadcasting, so clients never
-    // see the intermediate phase for AI players.
+    // team is AI — resolve it and broadcast each intermediate move separately,
+    // so clients can apply them in order and stay in sync.
     int safety = 50;
     std::set<std::pair<int,int>> visited;
     while (m_game && m_game->currentPhase() != TurnPhase::ChooseAction && safety-- > 0) {
@@ -333,7 +373,8 @@ void GameServer::processGameMove(int clientId, const Move& move) {
             }
             visited.insert(key);
             auto phaseEvents = m_game->makeMove(pc);
-            events.insert(events.end(), phaseEvents.begin(), phaseEvents.end());
+            // Broadcast each intermediate AI move so clients stay in sync
+            broadcastSingleMove(pc, phaseEvents);
         } else {
             break;
         }
@@ -343,7 +384,21 @@ void GameServer::processGameMove(int clientId, const Move& move) {
         m_game->state().advanceTurn();
     }
 
-    // Broadcast the move (with all AI chain resolutions included)
+    if (m_game->isGameOver()) {
+        QJsonObject overMsg;
+        overMsg["winner"] = static_cast<int>(m_game->getWinner());
+        overMsg["winnerName"] = QString::fromUtf8(teamName(m_game->getWinner()));
+        sendToAllInRoom(Protocol::makeMsg("game_over", overMsg));
+        m_inGame = false;
+        m_game.reset();
+        return;
+    }
+
+    // Process next AI turn (if the next team is AI)
+    processAITurns();
+}
+
+void GameServer::broadcastSingleMove(const Move& move, const std::vector<GameEvent>& events) {
     QJsonObject moveMsg;
     moveMsg["move"] = Protocol::moveToJson(move);
     QJsonArray evArr;
@@ -363,19 +418,6 @@ void GameServer::processGameMove(int clientId, const Move& move) {
     moveMsg["currentTeam"] = static_cast<int>(m_game->currentTeam());
     moveMsg["phase"] = static_cast<int>(m_game->currentPhase());
     sendToAllInRoom(Protocol::makeMsg("game_move", moveMsg));
-
-    if (m_game->isGameOver()) {
-        QJsonObject overMsg;
-        overMsg["winner"] = static_cast<int>(m_game->getWinner());
-        overMsg["winnerName"] = QString::fromUtf8(teamName(m_game->getWinner()));
-        sendToAllInRoom(Protocol::makeMsg("game_over", overMsg));
-        m_inGame = false;
-        m_game.reset();
-        return;
-    }
-
-    // Process next AI turn (if the next team is AI)
-    processAITurns();
 }
 
 void GameServer::processAITurns() {
@@ -401,36 +443,9 @@ void GameServer::onAITimer() {
     }
 
     Move chosen = AI::chooseBestMove(m_game->state(), moves);
+    // processGameMove handles AI choice phases (arrow, horse, etc.)
+    // and broadcasts each intermediate move to clients
     processGameMove(-1, chosen);
-
-    // Handle chain phases with cycle detection
-    int safety = 50;
-    std::set<std::pair<int,int>> visited;
-    while (m_game && m_game->currentPhase() != TurnPhase::ChooseAction && safety-- > 0) {
-        auto phaseMoves = m_game->getLegalMoves();
-        if (phaseMoves.empty()) break;
-        Move pc = AI::chooseBestMove(m_game->state(), phaseMoves);
-
-        auto key = std::make_pair(pc.to.row, pc.to.col);
-        if (visited.count(key)) {
-            bool found = false;
-            for (auto& alt : phaseMoves) {
-                auto altKey = std::make_pair(alt.to.row, alt.to.col);
-                if (!visited.count(altKey)) { pc = alt; found = true; break; }
-            }
-            if (!found) {
-                m_game->state().phase = TurnPhase::ChooseAction;
-                m_game->state().advanceTurn();
-                break;
-            }
-        }
-        visited.insert(key);
-        processGameMove(-1, pc);
-    }
-    if (safety <= 0 && m_game && m_game->currentPhase() != TurnPhase::ChooseAction) {
-        m_game->state().phase = TurnPhase::ChooseAction;
-        m_game->state().advanceTurn();
-    }
 }
 
 int GameServer::slotForTeam(Team team) const {
@@ -486,6 +501,7 @@ void GameServer::broadcastRoomState() {
     state["hostId"] = m_hostClientId;
     state["inGame"] = m_inGame;
     state["maxPlayers"] = maxPlayersForMap();
+    state["mapId"] = QString::fromStdString(m_mapId);
     sendToAll(Protocol::makeMsg("room_state", state));
 }
 

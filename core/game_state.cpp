@@ -83,11 +83,8 @@ std::vector<Tile> createDeck(uint32_t seed, int landCount, float tileDensity) {
     // Lighthouse (1)
     { Tile t; t.type = TileType::Lighthouse; deck.push_back(t); }
 
-    // BenGunn (3)
-    for (int i = 0; i < 3; i++) {
-        Tile t; t.type = TileType::BenGunn; t.visualVariant = i;
-        deck.push_back(t);
-    }
+    // BenGunn (1 — unique character)
+    { Tile t; t.type = TileType::BenGunn; deck.push_back(t); }
 
     // Missionary (1)
     { Tile t; t.type = TileType::Missionary; deck.push_back(t); }
@@ -169,6 +166,32 @@ std::vector<Tile> createDeck(uint32_t seed, int landCount, float tileDensity) {
     for (int i = 0; i < remaining; i++) {
         Tile t; t.type = TileType::Empty; t.visualVariant = i % 4;
         deck.push_back(t);
+    }
+
+    // Enforce unique tile limits (max 1: BenGunn, Missionary, Friday, Cannibal)
+    auto enforceMax1 = [&](TileType type) {
+        int count = 0;
+        for (auto& t : deck) {
+            if (t.type == type) {
+                count++;
+                if (count > 1) { t.type = TileType::Empty; t.visualVariant = 0; }
+            }
+        }
+    };
+    enforceMax1(TileType::BenGunn);
+    enforceMax1(TileType::Missionary);
+    enforceMax1(TileType::Friday);
+    enforceMax1(TileType::Cannibal);
+
+    // Cave: must be 0 or 2+, never exactly 1 (need at least 2 exits)
+    {
+        int caveCount = 0;
+        for (auto& t : deck) if (t.type == TileType::Cave) caveCount++;
+        if (caveCount == 1) {
+            for (auto& t : deck) {
+                if (t.type == TileType::Cave) { t.type = TileType::Empty; t.visualVariant = 0; break; }
+            }
+        }
     }
 
     // Shuffle

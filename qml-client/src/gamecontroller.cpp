@@ -82,8 +82,8 @@ void GameController::onNetworkMoveReceived(QJsonObject moveData) {
     QJsonObject moveObj = moveData["move"].toObject();
     int moveType = moveObj["type"].toInt();
     int pt = moveObj["pt"].toInt();
-    int toR = moveObj["toR"].toInt(-1), toC = moveObj["toC"].toInt(-1);
-    int fromR = moveObj["fromR"].toInt(-1), fromC = moveObj["fromC"].toInt(-1);
+    int toR = moveObj["tr"].toInt(-1), toC = moveObj["tc"].toInt(-1);
+    int fromR = moveObj["fr"].toInt(-1), fromC = moveObj["fc"].toInt(-1);
     addLog(QString("[%1] (%2,%3)->(%4,%5) тип=%6 фаза=%7 очередь=%8")
         .arg(QString::fromUtf8(teamName(static_cast<Team>(pt))))
         .arg(fromR).arg(fromC).arg(toR).arg(toC)

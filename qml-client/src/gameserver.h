@@ -57,6 +57,7 @@ private:
     void sendToAllInRoom(const QByteArray& data);
     void broadcastRoomState();
     void processGameMove(int clientId, const Move& move);
+    void broadcastSingleMove(const Move& move, const std::vector<GameEvent>& events);
     void processAITurns();
     int slotForTeam(Team team) const;
     bool isSlotAI(int slot) const;

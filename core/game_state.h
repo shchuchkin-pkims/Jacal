@@ -199,6 +199,13 @@ struct GameState {
                     if (pirates[t][j].drunkTurnsLeft > 0)
                         pirates[t][j].drunkTurnsLeft--;
                 }
+                // Handle drunk characters
+                Team ct = currentTeam();
+                for (int ci = 0; ci < MAX_CHARACTERS; ci++) {
+                    if (characters[ci].owner == ct && characters[ci].discovered &&
+                        characters[ci].alive && characters[ci].drunkTurnsLeft > 0)
+                        characters[ci].drunkTurnsLeft--;
+                }
                 return;
             }
         }

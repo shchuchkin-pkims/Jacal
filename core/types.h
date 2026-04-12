@@ -230,6 +230,8 @@ struct Character {
     bool carryingCoin = false;
     bool carryingGalleon = false;
     bool convertedToPirate = false; // Missionary converted via rum → acts as regular pirate
+    int spinnerProgress = 0;
+    int drunkTurnsLeft = 0;
 };
 
 // ============================================================

@@ -29,6 +29,7 @@ void NetworkClient::disconnect() {
     m_slots.clear();
     m_chatMessages.clear();
     m_buffer.clear();
+    m_lobbyMapId = "classic";
     emit connectionChanged();
 }
 
@@ -55,6 +56,11 @@ void NetworkClient::requestStartGame(const QString& mapId, float density) {
     data["density"] = density;
     send(Protocol::makeMsg("start_game", data));
 }
+
+void NetworkClient::sendMapChange(const QString& mapId) {
+    send(Protocol::makeMsg("set_map", {{"mapId", mapId}}));
+}
+
 
 void NetworkClient::requestSwapSlot(int targetSlot) {
     QJsonObject data;
@@ -134,7 +140,9 @@ void NetworkClient::onLanData() {
             if (srv["ip"].toString() == ip && srv["port"].toInt() == info["port"].toInt()) {
                 srv["name"] = info["name"].toString();
                 srv["players"] = info["players"].toInt();
+                srv["maxPlayers"] = info["maxPlayers"].toInt();
                 srv["inGame"] = info["inGame"].toBool();
+                srv["mapName"] = info["mapName"].toString();
                 m_lanServers[i] = srv;
                 found = true;
                 break;
@@ -148,6 +156,7 @@ void NetworkClient::onLanData() {
             srv["players"] = info["players"].toInt();
             srv["maxPlayers"] = info["maxPlayers"].toInt();
             srv["inGame"] = info["inGame"].toBool();
+            srv["mapName"] = info["mapName"].toString();
             m_lanServers.append(srv);
         }
         emit lanServersChanged();
@@ -175,6 +184,8 @@ void NetworkClient::handleMessage(const QJsonObject& msg) {
             // Use slot assigned during connection
         }
 
+        m_lobbyMapId = msg["mapId"].toString("classic");
+
         emit roomChanged();
         emit chatReceived();
     }
@@ -183,6 +194,8 @@ void NetworkClient::handleMessage(const QJsonObject& msg) {
         m_slots.clear();
         for (auto v : sl) m_slots.append(v.toObject().toVariantMap());
         m_isHost = (msg["hostId"].toInt() == m_myClientId);
+        if (msg.contains("mapId"))
+            m_lobbyMapId = msg["mapId"].toString("classic");
 
         // Find my slot by name match (simplified)
         for (int i = 0; i < m_slots.size(); i++) {

@@ -22,6 +22,28 @@ Rectangle {
             Layout.alignment: Qt.AlignHCenter
         }
 
+        // Nickname
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Text { text: "Никнейм:"; color: "#ccc"; font.pixelSize: 14 }
+            TextField {
+                id: nicknameField; Layout.fillWidth: true
+                text: ""; placeholderText: "Ваш никнейм"
+                color: "white"; font.pixelSize: 14
+                background: Rectangle { color: "#1a3a5a"; radius: 4; border.color: "#4a7aba" }
+            }
+        }
+
+        // Send nickname when connected to server
+        Connections {
+            target: networkClient
+            function onConnectionChanged() {
+                if (networkClient.connected && nicknameField.text.length > 0) {
+                    networkClient.setName(nicknameField.text)
+                }
+            }
+        }
+
         // Direct connect
         RowLayout {
             Layout.fillWidth: true; spacing: 8
@@ -112,6 +134,17 @@ Rectangle {
             onTriggered: networkClient.stopLanDiscovery()
         }
 
+        // Server list column headers
+        RowLayout {
+            Layout.fillWidth: true; spacing: 8
+            Layout.leftMargin: 6; Layout.rightMargin: 6
+            Text { text: "Название"; color: "#778"; font.pixelSize: 11; font.bold: true; Layout.fillWidth: true }
+            Text { text: "Карта"; color: "#778"; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 110 }
+            Text { text: "Игроки"; color: "#778"; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 50 }
+            Text { text: "Адрес"; color: "#778"; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 130 }
+            Text { text: "Статус"; color: "#778"; font.pixelSize: 11; font.bold: true; Layout.preferredWidth: 50 }
+        }
+
         // Server list
         Rectangle {
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -126,10 +159,11 @@ Rectangle {
                     RowLayout {
                         anchors.fill: parent; anchors.margins: 6; spacing: 8
                         Text { text: modelData.name; color: "#eee"; font.pixelSize: 13; Layout.fillWidth: true }
-                        Text { text: modelData.players + "/4"; color: "#aaa"; font.pixelSize: 12 }
-                        Text { text: modelData.ip + ":" + modelData.port; color: "#888"; font.pixelSize: 11 }
+                        Text { text: modelData.mapName || ""; color: "#8ac"; font.pixelSize: 12; Layout.preferredWidth: 110 }
+                        Text { text: modelData.players + "/" + modelData.maxPlayers; color: "#aaa"; font.pixelSize: 12; Layout.preferredWidth: 50 }
+                        Text { text: modelData.ip + ":" + modelData.port; color: "#888"; font.pixelSize: 11; Layout.preferredWidth: 130 }
                         Text { text: modelData.inGame ? "В игре" : "Лобби"
-                            color: modelData.inGame ? "#ff8800" : "#44cc44"; font.pixelSize: 11 }
+                            color: modelData.inGame ? "#ff8800" : "#44cc44"; font.pixelSize: 11; Layout.preferredWidth: 50 }
                     }
                     MouseArea {
                         id: mouseArea; anchors.fill: parent; hoverEnabled: true
@@ -236,9 +270,9 @@ Rectangle {
                                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                             }
 
-                            // Host: dropdown to change slot state
+                            // Host: dropdown to change slot state (also allows kicking players)
                             ComboBox {
-                                visible: networkClient.isHost && modelData.state !== "player"
+                                visible: networkClient.isHost && index !== networkClient.mySlot
                                 width: 110; height: 26
                                 model: ["Открыт", "ИИ", "Закрыт"]
                                 currentIndex: {
@@ -295,6 +329,11 @@ Rectangle {
                                 return ids
                             }
                             currentIndex: 0
+                            onActivated: function(idx) {
+                                if (mapIds && mapIds.length > idx) {
+                                    networkClient.sendMapChange(mapIds[idx])
+                                }
+                            }
                             background: Rectangle { color: "#2a3a5a"; radius: 3; border.color: "#4a6a8a" }
                             contentItem: Text {
                                 text: lobbyMapSelector.displayText; color: "#ccc"; font.pixelSize: 12
@@ -391,11 +430,22 @@ Rectangle {
                 // Map name
                 Text {
                     property string selMapId: {
-                        if (!lobbyMapSelector.mapIds || lobbyMapSelector.mapIds.length === 0) return "classic"
-                        return lobbyMapSelector.mapIds[lobbyMapSelector.currentIndex] || "classic"
+                        if (networkClient.isHost) {
+                            if (!lobbyMapSelector.mapIds || lobbyMapSelector.mapIds.length === 0) return "classic"
+                            return lobbyMapSelector.mapIds[lobbyMapSelector.currentIndex] || "classic"
+                        } else {
+                            return networkClient.lobbyMapId || "classic"
+                        }
                     }
                     id: mapNameLabel
-                    text: lobbyMapSelector.displayText || "Classic Island"
+                    text: {
+                        if (networkClient.isHost) return lobbyMapSelector.displayText || "Classic Island"
+                        var maps = gameController.availableMaps()
+                        var id = networkClient.lobbyMapId
+                        for (var i = 0; i < maps.length; i++)
+                            if (maps[i].id === id) return maps[i].name
+                        return id || "Classic Island"
+                    }
                     color: "#ffd700"; font.pixelSize: 16; font.bold: true
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
@@ -458,16 +508,31 @@ Rectangle {
             }
 
             Button {
-                text: "Начать игру"; Layout.fillWidth: true
+                property bool allReady: {
+                    var slots = networkClient.roomSlots
+                    for (var i = 0; i < slots.length; i++) {
+                        var s = slots[i]
+                        if (s.state === "player" && i !== networkClient.mySlot && !s.ready)
+                            return false
+                    }
+                    return true
+                }
+                text: allReady ? "Начать игру" : "Ожидание готовности..."
+                Layout.fillWidth: true
                 visible: networkClient.isHost
+                enabled: allReady
                 onClicked: {
                     var mapId = "classic"
                     if (lobbyMapSelector.mapIds && lobbyMapSelector.mapIds.length > 0)
                         mapId = lobbyMapSelector.mapIds[lobbyMapSelector.currentIndex]
                     networkClient.requestStartGame(mapId, lobbyDensitySlider.value)
                 }
-                background: Rectangle { color: parent.hovered ? "#6a8a3a" : "#4a6a2a"; radius: 5 }
-                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 14
+                background: Rectangle {
+                    color: parent.enabled ? (parent.hovered ? "#6a8a3a" : "#4a6a2a") : "#3a3a3a"
+                    radius: 5
+                }
+                contentItem: Text { text: parent.text
+                    color: parent.enabled ? "white" : "#888"; font.pixelSize: 14
                     horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
             }
 

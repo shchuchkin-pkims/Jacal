@@ -20,6 +20,7 @@ class NetworkClient : public QObject {
     Q_PROPERTY(QVariantList lanServers READ lanServers NOTIFY lanServersChanged)
     Q_PROPERTY(int mySlot READ mySlot NOTIFY roomChanged)
     Q_PROPERTY(int currentTeam READ currentNetTeam NOTIFY gameStateChanged)
+    Q_PROPERTY(QString lobbyMapId READ lobbyMapId NOTIFY roomChanged)
 
 public:
     explicit NetworkClient(QObject* parent = nullptr);
@@ -34,6 +35,7 @@ public:
     Q_INVOKABLE void requestStartGame(const QString& mapId = "classic", float density = -1.0f);
     Q_INVOKABLE void requestSwapSlot(int targetSlot);
     Q_INVOKABLE void sendMove(const QJsonObject& moveJson);
+    Q_INVOKABLE void sendMapChange(const QString& mapId);
     Q_INVOKABLE void startLanDiscovery();
     Q_INVOKABLE void stopLanDiscovery();
 
@@ -45,6 +47,7 @@ public:
     QVariantList lanServers() const { return m_lanServers; }
     int mySlot() const { return m_mySlot; }
     int currentNetTeam() const { return m_currentTeam; }
+    QString lobbyMapId() const { return m_lobbyMapId; }
 
     // Access local game for network play
     Game& game() { return m_game; }
@@ -85,5 +88,6 @@ private:
     QVariantList m_slots;
     QStringList m_chatMessages;
     QVariantList m_lanServers;
+    QString m_lobbyMapId = "classic";
     Game m_game; // local game instance for network play
 };
