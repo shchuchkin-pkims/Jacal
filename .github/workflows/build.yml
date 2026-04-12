@@ -7,76 +7,69 @@ on:
     branches: [ main, master ]
 
 jobs:
-  # Unit tests (fast, ~1s, no Qt needed)
   test-core:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build core tests
         run: |
           g++ -std=c++17 -O2 -I core \
             core/types.cpp core/game_state.cpp core/rules.cpp \
             core/game.cpp core/ai.cpp core/map_def.cpp \
             tests/test_core.cpp -o test_core
-
       - name: Run core tests
         run: ./test_core
 
-  # AI stress test (100 full AI games, ~10s, no Qt needed)
   test-ai-stress:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Build AI stress test
         run: |
           g++ -std=c++17 -O2 -I core \
             core/types.cpp core/game_state.cpp core/rules.cpp \
             core/game.cpp core/ai.cpp core/map_def.cpp \
             tests/test_ai_stress.cpp -o test_ai_stress
-
-      - name: Run AI stress test (100 games)
+      - name: Run AI stress test
         run: ./test_ai_stress
 
-  # Linux GUI (Qt6 QML)
   build-linux-gui:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [test-core, test-ai-stress]
     steps:
       - uses: actions/checkout@v4
-
       - name: Install Qt6
         run: |
           sudo apt-get update
-          sudo apt-get install -y qt6-base-dev qt6-declarative-dev \
-            qml6-module-qtquick qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts qml6-module-qtquick-window \
-            qml6-module-qtquick-templates qml6-module-qtqml-workerscript \
-            libqt6network6-dev libqt6quickcontrols2-6
-
+          sudo apt-get install -y \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-tools-dev \
+            libqt6network6 \
+            libqt6opengl6-dev \
+            qml6-module-qtquick \
+            qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts \
+            qml6-module-qtquick-window \
+            qml6-module-qtquick-templates \
+            qml6-module-qtqml-workerscript
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
-
       - name: Build
         run: cmake --build build -j$(nproc)
-
       - name: Upload Linux GUI
         uses: actions/upload-artifact@v4
         with:
           name: jackal-linux-gui
           path: build/qml-client/jackal
 
-  # Windows Console (cross-compiled)
   build-windows-console:
     runs-on: ubuntu-latest
     needs: [test-core, test-ai-stress]
     steps:
       - uses: actions/checkout@v4
-
       - name: Install MinGW
         run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64
-
       - name: Build Windows exe
         run: |
           x86_64-w64-mingw32-g++ -std=c++17 -O2 -static \
@@ -84,7 +77,6 @@ jobs:
             core/types.cpp core/game_state.cpp core/rules.cpp \
             core/game.cpp core/ai.cpp core/map_def.cpp \
             console/main.cpp -o jackal-win64.exe
-
       - name: Upload Windows exe
         uses: actions/upload-artifact@v4
         with:
