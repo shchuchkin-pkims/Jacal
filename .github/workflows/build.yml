@@ -78,7 +78,7 @@ jobs:
           host: windows
           target: desktop
           arch: win64_mingw
-          modules: "qtquick qtnetwork"
+
           tools: "tools_mingw1120"
 
       - name: Configure
