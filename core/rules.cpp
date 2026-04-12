@@ -513,8 +513,8 @@ MoveList getLegalMoves(const GameState& state) {
             }
             // Carrying coin → only revealed tiles
             if (carrying && !state.tileAt(to).revealed) continue;
-            // Missionary can't enter tiles with enemies
-            if (ch.type == CharacterType::Missionary) {
+            // Missionary and Friday can't enter tiles with enemies (non-combatants)
+            if (ch.type == CharacterType::Missionary || ch.type == CharacterType::Friday) {
                 if (state.tileAt(to).revealed && state.hasEnemyAt(to, team)) continue;
             }
 
@@ -1772,28 +1772,40 @@ EventList applyMove(GameState& state, const Move& move) {
             }
 
             // Friday-specific post-processing
-            if (ch.type == CharacterType::Friday && ch.alive && ch.pos.valid() && state.mapIsLand(ch.pos)) {
-                auto& tile = state.tileAt(ch.pos);
-                // Friday ignores traps
-                if (tp.state == PirateState::InTrap) {
-                    // Friday doesn't get trapped — free immediately
-                    ch.pos = tp.pos; // stay on tile but not trapped
+            if (ch.type == CharacterType::Friday) {
+                // Friday ignores cannibal — undo death (check BEFORE alive gate)
+                if (!ch.alive && tp.state == PirateState::Dead) {
+                    for (auto it = events.rbegin(); it != events.rend(); ++it) {
+                        if (it->type == EventType::PirateDied) {
+                            Coord dp = it->pos;
+                            if (dp.valid() && state.mapIsLand(dp) &&
+                                state.tileAt(dp).type == TileType::Cannibal) {
+                                ch.alive = true;
+                                ch.pos = dp;
+                            }
+                            break;
+                        }
+                    }
                 }
-                // Friday passes spinners instantly
-                if (isSpinner(tile.type) && tp.spinnerProgress > 0) {
-                    tp.spinnerProgress = 0; // will be restored below
-                    events.push_back({EventType::SpinnerAdvanced, ch.pos, {}, {}, ch.owner, {}, spinnerSteps(tile.type)});
-                }
-                // Friday dies on Rum
-                if (tile.type == TileType::Rum || tile.type == TileType::RumBarrel) {
-                    ch.alive = false;
-                    ch.pos = {-1, -1};
-                    events.push_back({EventType::CharacterDied, move.to, {}, {}, ch.owner, {}, ci});
-                }
-                // Friday ignores cannibal
-                if (tile.type == TileType::Cannibal) {
-                    // Friday survives — undo death if resolveChain killed temp pirate
-                    if (!ch.alive) { ch.alive = true; ch.pos = tp.pos; }
+
+                if (ch.alive && ch.pos.valid() && state.mapIsLand(ch.pos)) {
+                    auto& tile = state.tileAt(ch.pos);
+                    // Friday ignores traps
+                    if (tp.state == PirateState::InTrap) {
+                        // Friday stays on tile but not trapped (characters have no trap state)
+                    }
+                    // Friday passes spinners instantly
+                    if (isSpinner(tile.type) && ch.spinnerProgress > 0) {
+                        ch.spinnerProgress = 0;
+                        ch.drunkTurnsLeft = 0;
+                        events.push_back({EventType::SpinnerAdvanced, ch.pos, {}, {}, ch.owner, {}, spinnerSteps(tile.type)});
+                    }
+                    // Friday dies on Rum
+                    if (tile.type == TileType::Rum || tile.type == TileType::RumBarrel) {
+                        ch.alive = false;
+                        ch.pos = {-1, -1};
+                        events.push_back({EventType::CharacterDied, move.to, {}, {}, ch.owner, {}, ci});
+                    }
                 }
             }
 
