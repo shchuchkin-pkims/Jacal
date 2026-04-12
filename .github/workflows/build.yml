@@ -3,6 +3,7 @@ name: Build & Test Jacal
 on:
   push:
     branches: [ main, master, develop ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ main, master ]
 
@@ -42,43 +43,98 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            qt6-base-dev \
-            qt6-declarative-dev \
-            qt6-tools-dev \
-            libqt6network6 \
-            libqt6opengl6-dev \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts \
-            qml6-module-qtquick-window \
-            qml6-module-qtquick-templates \
-            qml6-module-qtqml-workerscript
+            qt6-base-dev qt6-declarative-dev qt6-tools-dev \
+            libqt6network6 libqt6opengl6-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts qml6-module-qtquick-window \
+            qml6-module-qtquick-templates qml6-module-qtqml-workerscript
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build -j$(nproc)
-      - name: Upload Linux GUI
+      - name: Package
+        run: |
+          mkdir -p release-linux
+          cp build/qml-client/jackal release-linux/
+          cp -r assets release-linux/
+          cp -r maps release-linux/
+          tar czf jackal-linux.tar.gz -C release-linux .
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jackal-linux-gui
-          path: build/qml-client/jackal
+          name: jackal-linux
+          path: jackal-linux.tar.gz
 
-  build-windows-console:
-    runs-on: ubuntu-latest
+  build-windows-gui:
+    runs-on: windows-latest
     needs: [test-core, test-ai-stress]
     steps:
       - uses: actions/checkout@v4
-      - name: Install MinGW
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64
-      - name: Build Windows exe
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.6.0"
+          host: windows
+          target: desktop
+          arch: win64_mingw
+          modules: "qtquick qtnetwork"
+          tools: "tools_mingw1120"
+
+      - name: Configure
+        shell: cmd
         run: |
-          x86_64-w64-mingw32-g++ -std=c++17 -O2 -static \
-            -I core \
-            core/types.cpp core/game_state.cpp core/rules.cpp \
-            core/game.cpp core/ai.cpp core/map_def.cpp \
-            console/main.cpp -o jackal-win64.exe
-      - name: Upload Windows exe
+          cmake -B build -G "MinGW Makefiles" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_PREFIX_PATH="%Qt6_DIR%"
+
+      - name: Build
+        shell: cmd
+        run: cmake --build build -j%NUMBER_OF_PROCESSORS%
+
+      - name: Package with windeployqt
+        shell: cmd
+        run: |
+          mkdir release-win
+          copy build\qml-client\jackal.exe release-win\
+          xcopy /E /I assets release-win\assets
+          xcopy /E /I maps release-win\maps
+          windeployqt release-win\jackal.exe --qmldir qml-client\qml --no-translations --no-system-d3d-compiler --no-opengl-sw
+
+      - name: Create zip
+        shell: pwsh
+        run: Compress-Archive -Path release-win\* -DestinationPath jackal-windows.zip
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: jackal-win64
-          path: jackal-win64.exe
+          name: jackal-windows
+          path: jackal-windows.zip
+
+  # Auto-release on tag push
+  release:
+    if: startsWith(github.ref, refs/tags/v)
+    runs-on: ubuntu-latest
+    needs: [build-linux-gui, build-windows-gui]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jackal-linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: jackal-windows
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            jackal-linux.tar.gz
+            jackal-windows.zip
+          generate_release_notes: true
