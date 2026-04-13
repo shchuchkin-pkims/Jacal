@@ -100,57 +100,59 @@ Rectangle {
             }
         }
 
-        // === Ship controls (+ layout: up/left/right/down) ===
-        Item {
+        // === Ship controls (3x3 grid: 8 directions + anchor center) ===
+        Grid {
             Layout.fillWidth: true
-            Layout.preferredHeight: 68
+            Layout.preferredHeight: 72
             visible: gameController.gameActive && !gameController.isAITurn
+            columns: 3; rows: 3; spacing: 2
+            anchors.horizontalCenter: parent.horizontalCenter
 
-            // Up
-            Button {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.top: parent.top
-                width: 60; height: 22; text: "\u25B2"
+            property int btnW: 40; property int btnH: 22
+            property string btnBg: "#2a3a5a"; property string btnHov: "#3a5a7a"
+
+            Button { width: parent.btnW; height: parent.btnH; text: "\u2196"
+                onClicked: gameController.moveShipUpLeft()
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u25B2"
                 onClicked: gameController.moveShipUp()
-                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
-                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            }
-            // Left
-            Button {
-                anchors.right: parent.horizontalCenter; anchors.rightMargin: 2
-                anchors.verticalCenter: parent.verticalCenter
-                width: 60; height: 22; text: "\u25C0"
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u2197"
+                onClicked: gameController.moveShipUpRight()
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u25C0"
                 onClicked: gameController.moveShipLeft()
-                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
-                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            }
-            // Center label
-            Text {
-                anchors.centerIn: parent
-                text: "\u2693"; color: "#667"; font.pixelSize: 14
-            }
-            // Right
-            Button {
-                anchors.left: parent.horizontalCenter; anchors.leftMargin: 2
-                anchors.verticalCenter: parent.verticalCenter
-                width: 60; height: 22; text: "\u25B6"
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Text { width: parent.btnW; height: parent.btnH; text: "\u2693"; color: "#667"
+                font.pixelSize: 14; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u25B6"
                 onClicked: gameController.moveShipRight()
-                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
-                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            }
-            // Down
-            Button {
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.bottom: parent.bottom
-                width: 60; height: 22; text: "\u25BC"
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u2199"
+                onClicked: gameController.moveShipDownLeft()
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u25BC"
                 onClicked: gameController.moveShipDown()
-                background: Rectangle { color: parent.hovered ? "#3a5a7a" : "#2a3a5a"; radius: 4 }
-                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 10
-                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-            }
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
+            Button { width: parent.btnW; height: parent.btnH; text: "\u2198"
+                onClicked: gameController.moveShipDownRight()
+                background: Rectangle { color: parent.hovered ? parent.parent.btnHov : parent.parent.btnBg; radius: 3 }
+                contentItem: Text { text: parent.text; color: "white"; font.pixelSize: 11
+                    horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter } }
         }
 
         // === Tabs: Crew / Log ===

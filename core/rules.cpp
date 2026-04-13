@@ -530,7 +530,7 @@ MoveList getLegalMoves(const GameState& state) {
 
     // Use rum (if team has rum bottles)
     if (state.rumOwned[t] > 0) {
-        // Free trapped pirates
+        // Free trapped / caved / spinning pirates
         for (int i = 0; i < PIRATES_PER_TEAM; i++) {
             auto& tp = state.pirates[t][i];
             if (tp.state == PirateState::InTrap) {
@@ -539,6 +539,11 @@ MoveList getLegalMoves(const GameState& state) {
                 moves.push_back(m);
             }
             if (tp.state == PirateState::InCave) {
+                Move m; m.type = MoveType::UseRum;
+                m.pirateId = tp.id; m.from = tp.pos; m.to = tp.pos;
+                moves.push_back(m);
+            }
+            if (state.isOnActiveSpinner(tp)) {
                 Move m; m.type = MoveType::UseRum;
                 m.pirateId = tp.id; m.from = tp.pos; m.to = tp.pos;
                 moves.push_back(m);
@@ -1828,7 +1833,7 @@ EventList applyMove(GameState& state, const Move& move) {
         int ti = static_cast<int>(move.pirateId.team);
         if (state.rumOwned[ti] <= 0) { state.advanceTurn(); break; }
 
-        // Case 1: Free trapped/caved pirate
+        // Case 1: Free trapped/caved/spinning pirate
         if (move.characterIndex < 0) {
             auto& p = state.pirateRef(move.pirateId);
             if (p.state == PirateState::InTrap) {
@@ -1842,6 +1847,12 @@ EventList applyMove(GameState& state, const Move& move) {
                 state.rumOwned[ti]--;
                 events.push_back({EventType::RumUsed, p.pos, {}, p.id, p.id.team});
                 events.push_back({EventType::CaveExited, {-1,-1}, p.pos, p.id});
+            } else if (state.isOnActiveSpinner(p)) {
+                // Free from spinner — pirate leaves immediately
+                p.spinnerProgress = 0;
+                state.rumOwned[ti]--;
+                events.push_back({EventType::RumUsed, p.pos, {}, p.id, p.id.team});
+                events.push_back({EventType::PirateFreed, p.pos, {}, p.id});
             }
         }
         // Case 2: Use rum on a character (Friday or Missionary)

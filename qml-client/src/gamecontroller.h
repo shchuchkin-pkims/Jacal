@@ -58,6 +58,10 @@ public:
     Q_INVOKABLE void moveShipRight();
     Q_INVOKABLE void moveShipUp();
     Q_INVOKABLE void moveShipDown();
+    Q_INVOKABLE void moveShipUpLeft();
+    Q_INVOKABLE void moveShipUpRight();
+    Q_INVOKABLE void moveShipDownLeft();
+    Q_INVOKABLE void moveShipDownRight();
     Q_INVOKABLE void cancelSelection();
     Q_INVOKABLE void activateRumUse();
     Q_INVOKABLE void cancelRumUse();
