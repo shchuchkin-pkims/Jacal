@@ -1028,14 +1028,10 @@ void GameController::tryExecuteMove(Coord target) {
     scheduleAIIfNeeded();
 }
 
-void GameController::moveShipLeft()      { doShipMoveAbsolute(0, -1); }
-void GameController::moveShipRight()     { doShipMoveAbsolute(0, +1); }
-void GameController::moveShipUp()        { doShipMoveAbsolute(-1, 0); }
-void GameController::moveShipDown()      { doShipMoveAbsolute(+1, 0); }
-void GameController::moveShipUpLeft()    { doShipMoveAbsolute(-1, -1); }
-void GameController::moveShipUpRight()   { doShipMoveAbsolute(-1, +1); }
-void GameController::moveShipDownLeft()  { doShipMoveAbsolute(+1, -1); }
-void GameController::moveShipDownRight() { doShipMoveAbsolute(+1, +1); }
+void GameController::moveShipLeft()  { doShipMoveAbsolute(0, -1); }
+void GameController::moveShipRight() { doShipMoveAbsolute(0, +1); }
+void GameController::moveShipUp()    { doShipMoveAbsolute(-1, 0); }
+void GameController::moveShipDown()  { doShipMoveAbsolute(+1, 0); }
 
 void GameController::doShipMoveAbsolute(int targetDr, int targetDc) {
     if (!m_gameActive || m_game.isGameOver() || isAITurn()) return;

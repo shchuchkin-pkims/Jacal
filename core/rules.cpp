@@ -165,22 +165,14 @@ static void addShipMoves(const GameState& s, Team team, MoveList& moves) {
     const Ship& ship = s.ships[static_cast<int>(team)];
     Coord pos = ship.pos;
 
-    // Ship can move to any adjacent WATER cell that is next to at least one LAND cell
-    // (i.e. stays along the coastline)
-    for (int d = 0; d < 8; d++) {
+    // Ship moves in 4 cardinal directions to any adjacent water cell
+    const int dirs[] = {DIR_N, DIR_S, DIR_E, DIR_W};
+    for (int d : dirs) {
         Coord dest = pos.moved(static_cast<Direction>(d));
         if (!dest.inBounds()) continue;
         if (!s.mapIsWater(dest)) continue;        // must be water
         if (s.mapIsRock(dest)) continue;           // can't go on rocks
         if (s.shipIndexAt(dest) >= 0) continue;    // can't stack ships
-
-        // Must be adjacent to at least one land cell (coastline)
-        bool nearLand = false;
-        for (int d2 = 0; d2 < 8; d2++) {
-            Coord adj = dest.moved(static_cast<Direction>(d2));
-            if (adj.inBounds() && s.mapIsLand(adj)) { nearLand = true; break; }
-        }
-        if (!nearLand) continue;
 
         Move m;
         m.type = MoveType::MoveShip;
@@ -441,6 +433,20 @@ MoveList getLegalMoves(const GameState& state) {
             break;
         case PirateState::Dead:
             break;
+        }
+    }
+
+    // Pickup coins: pirates on tiles with coins/galleon who aren't carrying anything
+    for (int i = 0; i < PIRATES_PER_TEAM; i++) {
+        auto& p = state.pirates[t][i];
+        if (p.state != PirateState::OnBoard || !state.mapIsLand(p.pos)) continue;
+        if (p.carryingCoin || p.carryingGalleon) continue;
+        if (state.isOnActiveSpinner(p)) continue; // pickup after spinner exit, not during
+        auto& tile = state.tileAt(p.pos);
+        if (tile.coins > 0 || tile.hasGalleonTreasure) {
+            Move m; m.type = MoveType::PickupCoin;
+            m.pirateId = p.id; m.from = p.pos; m.to = p.pos;
+            moves.push_back(m);
         }
     }
 
